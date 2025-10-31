@@ -331,62 +331,63 @@ def render_home(flash_msg=None):
     </html>
     """
 
-
 def render_calendar_page():
-    """
-    Returns the calendar HTML page.
-    Uses FullCalendar from a CDN.
-    Relies on /events.json for data.
-    Adds:
-    - 24h time display
-    - hover tooltip
-    - click alert with details
-    """
-    return """
+    return f"""
     <!DOCTYPE html>
-    <html lang="en">
+    <html>
     <head>
-        <meta charset="UTF-8">
+        <meta charset="utf-8"/>
         <title>LEXI Scheduling</title>
 
-        <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet">
-        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+        <!-- FullCalendar (from CDN) -->
+        <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.9/index.global.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.9/index.global.min.js"></script>
 
         <style>
-            body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                background: #f5f5f5;
-                padding: 20px;
-                text-align: center;
-            }
-            h1 {
-                margin-bottom: 0.25em;
-            }
-            #calendarWrapper {
-                max-width: 1000px;
-                margin: 20px auto;
-                background: #fff;
-                border-radius: 12px;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-                padding: 20px;
-                text-align: left;
-                position: relative;
-            }
-            #calendar {
+            body {{
+                font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+                background:#f5f5f5;
+                color:#222;
+                text-align:center;
+                padding:30px 10px;
+            }}
+            h1 {{
+                margin:0 0 .25em 0;
+                font-size:1.75em;
+                font-weight:600;
+                color:#000;
+            }}
+            .subhead {{
+                color:#666;
+                font-size:0.95em;
+                margin-bottom:1em;
+            }}
+            #calendarWrapper {{
+                max-width: 960px;
+                background:#fff;
+                margin:0 auto;
+                border-radius:12px;
+                box-shadow:0 2px 10px rgba(0,0,0,0.08);
+                padding:20px;
+                text-align:left;
+                position: relative; /* important for tooltip positioning */
+            }}
+            #calendar {{
                 max-width: 960px;
                 margin: 0 auto;
-            }
-            .backlink {
+            }}
+            .backlink {{
                 font-size: 0.9em;
                 margin-top: 1em;
-            }
-            .backlink a {
+                text-align:center;
+            }}
+            .backlink a {{
                 color: #007bff;
                 text-decoration: none;
-            }
+            }}
 
-            /* tooltip */
-            #fc-tooltip {
+            /* tooltip that WE control */
+            #fc-tooltip {{
                 position: absolute;
                 z-index: 9999;
                 background: rgba(0,0,0,0.8);
@@ -399,12 +400,13 @@ def render_calendar_page():
                 white-space: nowrap;
                 display: none;
                 box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-            }
+            }}
         </style>
     </head>
     <body>
+
         <h1>LEXI Scheduling</h1>
-        <div style="color:#666; font-size:0.95em;">Live view of scheduled Lexi Live jobs</div>
+        <div class="subhead">Live view of scheduled Lexi Live jobs</div>
 
         <div id="calendarWrapper">
             <div id="calendar"></div>
@@ -416,122 +418,125 @@ def render_calendar_page():
         </div>
 
         <script>
-        <script>
-document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', function() {{
 
-    const tooltipEl = document.getElementById('fc-tooltip');
+            const tooltipEl = document.getElementById('fc-tooltip');
 
-    function fmtDateTime(isoStr) {
-        // isoStr is like "2025-11-01T17:30:00+11:00"
-        // We turn it into "01 Nov 2025 17:30"
-        const d = new Date(isoStr);
-        const pad = n => n.toString().padStart(2,'0');
-        const day = pad(d.getDate());
-        const mon = d.toLocaleString('en-AU', { month: 'short' });
-        const yr  = d.getFullYear();
-        const hr  = pad(d.getHours());
-        const min = pad(d.getMinutes());
-        return day + ' ' + mon + ' ' + yr + ' ' + hr + ':' + min;
-    }
+            function fmtDateTime(isoStr) {{
+                // isoStr is like "2025-11-01T17:30:00+11:00"
+                // We turn it into "01 Nov 2025 17:30"
+                const d = new Date(isoStr);
+                const pad = n => n.toString().padStart(2,'0');
+                const day = pad(d.getDate());
+                const mon = d.toLocaleString('en-AU', {{ month: 'short' }});
+                const yr  = d.getFullYear();
+                const hr  = pad(d.getHours());
+                const min = pad(d.getMinutes());
+                return day + ' ' + mon + ' ' + yr + ' ' + hr + ':' + min;
+            }}
 
-    // TEMP basic tooltip position (we'll improve in the next step)
-    function showTooltip(jsEvent, html) {
-        tooltipEl.innerHTML = html;
-        tooltipEl.style.display = 'block';
+            // --- basic tooltip for now (mouse-follow) ---
+            function showTooltip(jsEvent, html) {{
+                tooltipEl.innerHTML = html;
+                tooltipEl.style.display = 'block';
 
-        // just stick it near the mouse for now so it's visible
-        tooltipEl.style.left = (jsEvent.pageX + 10) + 'px';
-        tooltipEl.style.top  = (jsEvent.pageY + 10) + 'px';
-    }
+                // position near mouse (safe default baseline)
+                tooltipEl.style.left = (jsEvent.pageX + 10) + 'px';
+                tooltipEl.style.top  = (jsEvent.pageY + 10) + 'px';
+            }}
 
-    function hideTooltip() {
-        tooltipEl.style.display = 'none';
-    }
+            function hideTooltip() {{
+                tooltipEl.style.display = 'none';
+            }}
 
-    var calEl = document.getElementById('calendar');
-    var calendar = new FullCalendar.Calendar(calEl, {
-        initialView: 'dayGridMonth',
-        timeZone: 'Australia/Sydney',
-        height: 'auto',
-        headerToolbar: {
-            left: 'prev,next today',
-            center: 'title',
-            right: 'dayGridMonth,timeGridWeek,timeGridDay'
-        },
+            var calEl = document.getElementById('calendar');
+            var calendar = new FullCalendar.Calendar(calEl, {{
+                initialView: 'dayGridMonth',
+                timeZone: 'Australia/Sydney',
+                height: 'auto',
+                headerToolbar: {{
+                    left: 'prev,next today',
+                    center: 'title',
+                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                }},
 
-        // Use 24h time everywhere we can
-        eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
-        slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+                // 24h formatting
+                eventTimeFormat: {{ hour: '2-digit', minute: '2-digit', hour12: false }},
+                slotLabelFormat: {{ hour: '2-digit', minute: '2-digit', hour12: false }},
 
-        events: function(fetchInfo, successCallback, failureCallback) {
-            const params = new URLSearchParams({
-                start: fetchInfo.startStr,
-                end: fetchInfo.endStr
-            });
-            fetch('/events.json?' + params, {
-                credentials: 'include' // send cookies so PIN lock still applies
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.error === "locked") {
-                    alert("Session locked. Please re-enter PIN.");
-                    window.location = "/";
-                    return;
-                }
-                successCallback(data);
-            })
-            .catch(err => failureCallback(err));
-        },
+                events: function(fetchInfo, successCallback, failureCallback) {{
+                    const params = new URLSearchParams({{
+                        start: fetchInfo.startStr,
+                        end: fetchInfo.endStr
+                    }});
+                    fetch('/events.json?' + params, {{
+                        credentials: 'include' // send cookies so PIN lock still applies
+                    }})
+                    .then(r => r.json())
+                    .then(data => {{
+                        if (data.error === "locked") {{
+                            alert("Session locked. Please re-enter PIN.");
+                            window.location = "/";
+                            return;
+                        }}
+                        successCallback(data);
+                    }})
+                    .catch(err => failureCallback(err));
+                }},
 
-        eventDidMount: function(info) {
-            // kill the browser/FullCalendar default tooltip,
-            // so we don't get that black popup floating off to the right
-            info.el.removeAttribute('title');
+                eventDidMount: function(info) {{
+                    // Stop FullCalendar / browser default hover tooltip.
+                    // This is what was putting that black box way out to the right.
+                    info.el.removeAttribute('title');
 
-            // our hover tooltip
-            info.el.addEventListener('mouseenter', function(ev) {
-                const title = info.event.title || '(no title)';
-                const startStr = fmtDateTime(info.event.startStr);
-                const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
-                let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
-                if (endStr) {
-                    tipHtml += ' → ' + endStr;
-                }
+                    // Custom hover handling (OUR tooltip)
+                    info.el.addEventListener('mouseenter', function(ev) {{
+                        const title = info.event.title || '(no title)';
+                        const startStr = fmtDateTime(info.event.startStr);
+                        const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
+                        let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
+                        if (endStr) {{
+                            tipHtml += ' → ' + endStr;
+                        }}
 
-                showTooltip(ev, tipHtml);
-            });
+                        showTooltip(ev, tipHtml);
+                    }});
 
-            info.el.addEventListener('mouseleave', function() {
-                hideTooltip();
-            });
-        },
+                    info.el.addEventListener('mousemove', function(ev) {{
+                        if (tooltipEl.style.display === 'block') {{
+                            tooltipEl.style.left = (ev.pageX + 10) + 'px';
+                            tooltipEl.style.top  = (ev.pageY + 10) + 'px';
+                        }}
+                    }});
 
-        eventClick: function(info) {
-            info.jsEvent.preventDefault();
-            const title = info.event.title || '(no title)';
-            const startStr = fmtDateTime(info.event.startStr);
-            const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
-            const desc = info.event.extendedProps && info.event.extendedProps.description
-                ? info.event.extendedProps.description
-                : '';
+                    info.el.addEventListener('mouseleave', function() {{
+                        hideTooltip();
+                    }});
+                }},
 
-            let msg = title + "\n" + startStr;
-            if (endStr) {
-                msg += " → " + endStr;
-            }
-            if (desc) {
-                msg += "\n\n" + desc;
-            }
-            alert(msg);
-        }
-    });
+                eventClick: function(info) {{
+                    info.jsEvent.preventDefault();
+                    const title = info.event.title || '(no title)';
+                    const startStr = fmtDateTime(info.event.startStr);
+                    const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
+                    const desc = info.event.extendedProps && info.event.extendedProps.description
+                        ? info.event.extendedProps.description
+                        : '';
 
-    calendar.render();
-});
-</script>
+                    let msg = title + "\\n" + startStr;
+                    if (endStr) {{
+                        msg += " → " + endStr;
+                    }}
+                    if (desc) {{
+                        msg += "\\n\\n" + desc;
+                    }}
+                    alert(msg);
+                }}
+            }});
 
-        
-        
+            calendar.render();
+        }});
+        </script>
     </body>
     </html>
     """
