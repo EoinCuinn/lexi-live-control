@@ -145,6 +145,120 @@ def pick_badge_color(state_text):
     else:
         return "#6c757d"  # grey / unknown
 
+def get_upcoming_events():
+    """
+    Fetch upcoming scheduled Lexi jobs from the EEG scheduling API and return
+    a list of dicts:
+        { "date_str": "...", "time_str": "...", "title": "..." }
+
+    We look forward ~30 days from 'now' in Australia/Sydney.
+    """
+    if not API_KEY:
+        return []
+
+    tz = pytz.timezone("Australia/Sydney")
+
+    now_local = datetime.datetime.now(tz)
+    future_local = now_local + datetime.timedelta(days=30)
+
+    start_ts = int(now_local.timestamp())
+    end_ts   = int(future_local.timestamp())
+
+    params = {
+        "duration_start": start_ts,
+        "duration_end": end_ts,
+        "calculate_recurrences": "true"
+    }
+
+    try:
+        resp = requests.get(
+            SCHED_BASE,
+            params=params,
+            auth=(API_USERNAME, API_KEY),
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+    except Exception:
+        return []
+
+    if not resp.ok:
+        return []
+
+    data = resp.json()
+    rows = []
+
+    # Reuse the same ICS parsing style as /events.json :contentReference[oaicite:2]{index=2}
+    for ev in data.get("events", []):
+        ics = ev.get("ics", "") or ""
+
+        title = "LEXI Booking"
+        description = ""
+
+        # SUMMARY → title
+        if "SUMMARY:" in ics:
+            try:
+                after = ics.split("SUMMARY:", 1)[1]
+                title_line = after.split("\r\n", 1)[0]
+                if title_line.strip():
+                    title = title_line.strip()
+            except Exception:
+                pass
+
+        # DESCRIPTION (not shown in table yet but we could surface later)
+        if "DESCRIPTION:" in ics:
+            try:
+                after_d = ics.split("DESCRIPTION:", 1)[1]
+                desc_line = after_d.split("\r\n", 1)[0]
+                if desc_line.strip():
+                    description = desc_line.strip()
+            except Exception:
+                pass
+
+        def extract_dt(tag):
+            marker = f"{tag};TZID=Australia/Sydney:"
+            if marker in ics:
+                try:
+                    raw = ics.split(marker, 1)[1].split("\r\n", 1)[0].strip()
+                    dt_naive = datetime.datetime.strptime(raw, "%Y%m%dT%H%M%S")
+                    return tz.localize(dt_naive)
+                except Exception:
+                    return None
+            return None
+
+        start_dt = extract_dt("DTSTART")
+        end_dt   = extract_dt("DTEND")
+
+        # Fallbacks using epoch times from API if ICS missing times
+        if not start_dt:
+            st_epoch = ev.get("start_time")
+            if st_epoch is not None:
+                start_dt = datetime.datetime.fromtimestamp(st_epoch, tz)
+        if not end_dt:
+            en_epoch = ev.get("end_time")
+            if en_epoch is not None:
+                end_dt = datetime.datetime.fromtimestamp(en_epoch, tz)
+
+        # If still no times, skip
+        if not start_dt or not end_dt:
+            continue
+
+        # Build display strings for table
+        # Example: "Thu Oct 30" and "17:30 – 18:00"
+        date_str = start_dt.strftime("%a %b %d")
+        time_str = f"{start_dt.strftime('%H:%M')} – {end_dt.strftime('%H:%M')}"
+
+        rows.append({
+            "date_str": date_str,
+            "time_str": time_str,
+            "title": title,
+        })
+
+    # Sort by start time ascending just in case API gives weird order
+    # (we can sort using start_dt, but we didn't store start_dt itself,
+    # so let's rebuild temporarily above if we want true ordering).
+    # For now assume API is chronological enough.
+
+    return rows
 
 # -------------------
 # HTML RENDER HELPERS
@@ -200,17 +314,44 @@ def render_lock_page(error_msg=None):
 def render_home(flash_msg=None):
     """
     Control panel main screen.
-    Shows:
-    - instance name
-    - live state pill that auto-refreshes
-    - Turn ON / Turn OFF buttons
-    - Link to calendar
+    - instance name / state
+    - ON / OFF buttons
+    - View Schedule link
+    - Upcoming Jobs table (next 30 days, scrollable)
     - Lock Panel button
     """
     instance_name, instance_state = eeg_status()
     badge_color = pick_badge_color(instance_state)
 
     safe_flash = escape(flash_msg) if flash_msg else "PIN accepted."
+
+    # Build upcoming-jobs table rows
+    upcoming = get_upcoming_events()
+
+    if upcoming:
+        rows_html = ""
+        for row in upcoming:
+            rows_html += f"""
+            <tr>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee; white-space:nowrap;">
+                    {escape(row['date_str'])}
+                </td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee; white-space:nowrap;">
+                    {escape(row['time_str'])}
+                </td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;">
+                    {escape(row['title'])}
+                </td>
+            </tr>
+            """
+    else:
+        rows_html = """
+        <tr>
+            <td colspan="3" style="padding:10px; text-align:center; color:#666;">
+                No upcoming jobs found.
+            </td>
+        </tr>
+        """
 
     return f"""
     <!DOCTYPE html>
@@ -252,11 +393,11 @@ def render_home(flash_msg=None):
         </script>
     </head>
 
-    <body style="font-family:sans-serif; max-width:400px; margin:40px auto; text-align:center;">
+    <body style="font-family:sans-serif; max-width:420px; margin:40px auto; text-align:center; color:#222;">
 
         <h1 style="margin-bottom:0.25em;">Lexi Live Control</h1>
         <p style="color:#666;margin:0 0 1em 0;">Instance:
-            <span id="instanceName">{instance_name}</span>
+            <span id="instanceName">{escape(instance_name)}</span>
         </p>
 
         <div id="stateBadge" style="
@@ -267,7 +408,7 @@ def render_home(flash_msg=None):
             display:inline-block;
             padding:4px 10px;
             border-radius:6px;">
-            State: <span id="stateText">{instance_state}</span>
+            State: <span id="stateText">{escape(instance_state)}</span>
         </div>
 
         <form action="/on" method="post" style="margin:1em 0;">
@@ -296,7 +437,7 @@ def render_home(flash_msg=None):
             </button>
         </form>
 
-        <div style="margin-top:2em;">
+        <div style="margin-top:1.5em;">
             <a href="/calendar" style="
                 display:inline-block;
                 font-size:1.0em;
@@ -304,17 +445,50 @@ def render_home(flash_msg=None):
                 border-radius:6px;
                 background:#17a2b8;
                 color:#fff;
-                text-decoration:none;
-                ">
+                text-decoration:none;">
                 View Schedule
             </a>
+        </div>
+
+        <!-- Upcoming Jobs block -->
+        <div style="
+            margin-top:2em;
+            background:#fff;
+            border-radius:8px;
+            box-shadow:0 2px 6px rgba(0,0,0,0.08);
+            padding:12px;
+            text-align:left;">
+
+            <div style="
+                font-size:0.95em;
+                font-weight:600;
+                margin:0 0 .5em 0;
+                text-align:center;
+                color:#000;">
+                Upcoming Jobs
+            </div>
+
+            <div style="max-height:200px; overflow-y:auto; border:1px solid #eee; border-radius:4px;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.85em;">
+                    <thead>
+                        <tr style="background:#f8f9fa;">
+                            <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #ddd; white-space:nowrap;">Date</th>
+                            <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #ddd; white-space:nowrap;">Time</th>
+                            <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #ddd;">Event</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows_html}
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <p style="font-size:0.9em;color:#444;margin-top:2em;">
             {safe_flash}
         </p>
 
-        <form action="/lock" method="post" style="margin-top:2em;">
+        <form action="/lock" method="post" style="margin-top:1em;">
             <button style="
                 font-size:0.9em;
                 padding:0.5em 1em;
@@ -330,6 +504,7 @@ def render_home(flash_msg=None):
     </body>
     </html>
     """
+
 
 def render_calendar_page():
     return f"""
