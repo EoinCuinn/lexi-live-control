@@ -389,3 +389,119 @@ def status_json():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
+from flask import Flask, request, make_response, jsonify
+import requests, datetime, pytz
+
+# --- Add below your existing config ---
+EEG_API_URL = "https://www.eegcloud.tv/events"
+EEG_USERNAME = "api_key"        # same as before
+EEG_KEY = "<YOUR_REAL_API_KEY>" # same as before
+
+# --- PIN check helper (reuse your current logic) ---
+def is_unlocked(req):
+    return req.cookies.get("access_granted") == "true"
+
+# --- Calendar Page ---
+@app.route("/calendar")
+def calendar_page():
+    if not is_unlocked(request):
+        # reuse your existing PIN entry page logic here
+        return pin_page()
+
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>LEXI Scheduling</title>
+        <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+        <style>
+            body { font-family: Arial, sans-serif; background:#fafafa; padding:20px; text-align:center; }
+            #calendar { max-width: 900px; margin: 40px auto; background:white; border-radius: 12px; padding: 10px; box-shadow:0 2px 8px rgba(0,0,0,0.1); }
+        </style>
+    </head>
+    <body>
+        <h1>LEXI Scheduling</h1>
+        <div id="calendar"></div>
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                var calendarEl = document.getElementById('calendar');
+                var calendar = new FullCalendar.Calendar(calendarEl, {
+                    initialView: 'dayGridMonth',
+                    timeZone: 'Australia/Sydney',
+                    height: 'auto',
+                    headerToolbar: {
+                        left: 'prev,next today',
+                        center: 'title',
+                        right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                    },
+                    events: function(fetchInfo, successCallback, failureCallback) {
+                        const params = new URLSearchParams({
+                            start: fetchInfo.startStr,
+                            end: fetchInfo.endStr
+                        });
+                        fetch('/events.json?' + params)
+                            .then(response => response.json())
+                            .then(data => successCallback(data))
+                            .catch(err => failureCallback(err));
+                    }
+                });
+                calendar.render();
+            });
+        </script>
+    </body>
+    </html>
+    """
+
+# --- Events Data Feed ---
+@app.route("/events.json")
+def events_feed():
+    if not is_unlocked(request):
+        return jsonify({"error": "forbidden"}), 403
+
+    start_str = request.args.get("start")
+    end_str = request.args.get("end")
+    if not start_str or not end_str:
+        return jsonify([])
+
+    # Convert ISO date → epoch seconds
+    tz = pytz.timezone("Australia/Sydney")
+    start_ts = int(tz.localize(datetime.datetime.fromisoformat(start_str)).timestamp())
+    end_ts = int(tz.localize(datetime.datetime.fromisoformat(end_str)).timestamp())
+
+    eeg_url = f"{EEG_API_URL}?duration_start={start_ts}&duration_end={end_ts}&calculate_recurrences=true"
+    resp = requests.get(eeg_url, auth=(EEG_USERNAME, EEG_KEY))
+    if resp.status_code != 200:
+        return jsonify([])
+
+    data = resp.json()
+    events = []
+    for ev in data.get("events", []):
+        # Try ICS parsing first for accurate timezone
+        ics = ev.get("ics", "")
+        title = "LEXI Booking"
+        if "SUMMARY:" in ics:
+            title = ics.split("SUMMARY:")[1].split("\r\n")[0].strip()
+        if "DTSTART;TZID=Australia/Sydney:" in ics:
+            start_raw = ics.split("DTSTART;TZID=Australia/Sydney:")[1].split("\r\n")[0].strip()
+            start_fmt = datetime.datetime.strptime(start_raw, "%Y%m%dT%H%M%S")
+            start_dt = tz.localize(start_fmt)
+        else:
+            start_dt = datetime.datetime.fromtimestamp(ev["start_time"], tz)
+
+        if "DTEND;TZID=Australia/Sydney:" in ics:
+            end_raw = ics.split("DTEND;TZID=Australia/Sydney:")[1].split("\r\n")[0].strip()
+            end_fmt = datetime.datetime.strptime(end_raw, "%Y%m%dT%H%M%S")
+            end_dt = tz.localize(end_fmt)
+        else:
+            end_dt = datetime.datetime.fromtimestamp(ev["end_time"], tz)
+
+        events.append({
+            "title": title,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat()
+        })
+
+    return jsonify(events)
