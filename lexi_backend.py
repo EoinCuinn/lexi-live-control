@@ -1,4 +1,6 @@
 import os
+import datetime
+import pytz
 import requests
 from flask import Flask, request, abort, jsonify, redirect, make_response
 from markupsafe import escape
@@ -7,29 +9,37 @@ from markupsafe import escape
 # CONFIG & SETUP
 # -------------------
 
+# Control API base (turn_on / turn_off / status)
 EEG_BASE = "https://www.eegcloud.tv/speech-recognition/live/v2"
+
+# Scheduling API base (calendar events)
+SCHED_BASE = "https://www.eegcloud.tv/events"
+
+# Your Lexi instance ID
 INSTANCE_ID = "asr_instance_EUwk84qjnygKawQK"  # Lexi Live test instance
 
+# EEG auth: username is always literally "api_key"
 API_USERNAME = "api_key"
 API_KEY = os.environ.get("EEG_API_KEY")
 
 # PIN lock config
 ACCESS_PIN = os.environ.get("ACCESS_PIN", "2065")
 
+# Flask app
 app = Flask(__name__)
 
-# Flask session signing key
+# Secret for signing cookies etc.
 app.secret_key = os.environ.get("SECRET_KEY", "CHANGE-ME-LATER")
 
 
 # -------------------
-# HELPERS
+# AUTH HELPERS
 # -------------------
 
 def is_authorized(req: request) -> bool:
     """
     Check whether the user already passed the PIN.
-    We store a signed cookie 'auth_ok' = 'yes'.
+    We store a signed-ish cookie 'auth_ok' = 'yes'.
     """
     auth_ok = req.cookies.get("auth_ok", "")
     return auth_ok == "yes"
@@ -42,9 +52,14 @@ def check_pin(submitted_pin: str) -> bool:
     return submitted_pin == ACCESS_PIN
 
 
+# -------------------
+# EEG HELPERS
+# -------------------
+
 def fetch_instance_info():
     """
     Fetch info about all instances, then return the dict for INSTANCE_ID.
+    Uses /speech-recognition/live/v2/instances?get_history=0
     """
     if not API_KEY:
         return None
@@ -103,7 +118,7 @@ def eeg_post(action):
                 "Accept": "application/json",
                 "Content-Type": "application/json",
             },
-            json={},
+            json={},  # body can be empty
             timeout=10,
         )
     except Exception as e:
@@ -120,7 +135,7 @@ def eeg_post(action):
 
 def pick_badge_color(state_text):
     """
-    Colour for the status pill.
+    Choose pill color for ON/OFF/UNKNOWN.
     """
     st_upper = (state_text or "UNKNOWN").upper()
     if st_upper in ("ON", "RUNNING", "ACTIVE"):
@@ -131,11 +146,14 @@ def pick_badge_color(state_text):
         return "#6c757d"  # grey / unknown
 
 
+# -------------------
+# HTML RENDER HELPERS
+# -------------------
+
 def render_lock_page(error_msg=None):
     """
-    PIN gate screen. Clean, client-facing.
-    - No AVE staff footer.
-    - If there's an error, show it as red text (no raw HTML).
+    PIN gate screen for both panel and calendar.
+    Clean, client-facing.
     """
     safe_error = escape(error_msg) if error_msg else ""
     error_block = (
@@ -153,7 +171,7 @@ def render_lock_page(error_msg=None):
     </head>
     <body style="font-family:sans-serif; max-width:360px; margin:60px auto; text-align:center;">
         <h1 style="margin-bottom:0.5em;">Access PIN Required</h1>
-        <p style="color:#666; margin-top:0;">Enter PIN to control Lexi Live.</p>
+        <p style="color:#666; margin-top:0;">Enter PIN to continue.</p>
 
         {error_block}
 
@@ -181,11 +199,12 @@ def render_lock_page(error_msg=None):
 
 def render_home(flash_msg=None):
     """
-    Control panel HTML (only shown if authorized).
-    Includes:
+    Control panel main screen.
+    Shows:
     - instance name
     - live state pill that auto-refreshes
-    - ON/OFF buttons
+    - Turn ON / Turn OFF buttons
+    - Link to calendar
     - Lock Panel button
     """
     instance_name, instance_state = eeg_status()
@@ -277,6 +296,20 @@ def render_home(flash_msg=None):
             </button>
         </form>
 
+        <div style="margin-top:2em;">
+            <a href="/calendar" style="
+                display:inline-block;
+                font-size:1.0em;
+                padding:0.6em 1.2em;
+                border-radius:6px;
+                background:#17a2b8;
+                color:#fff;
+                text-decoration:none;
+                ">
+                View Schedule
+            </a>
+        </div>
+
         <p style="font-size:0.9em;color:#444;margin-top:2em;">
             {safe_flash}
         </p>
@@ -294,6 +327,107 @@ def render_home(flash_msg=None):
             </button>
         </form>
 
+    </body>
+    </html>
+    """
+
+
+def render_calendar_page():
+    """
+    Returns the calendar HTML page.
+    Uses FullCalendar from a CDN.
+    Relies on /events.json for data.
+    """
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>LEXI Scheduling</title>
+
+        <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                background: #f5f5f5;
+                padding: 20px;
+                text-align: center;
+            }
+            h1 {
+                margin-bottom: 0.25em;
+            }
+            #calendarWrapper {
+                max-width: 1000px;
+                margin: 20px auto;
+                background: #fff;
+                border-radius: 12px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+                padding: 20px;
+                text-align: left;
+            }
+            #calendar {
+                max-width: 960px;
+                margin: 0 auto;
+            }
+            .backlink {
+                font-size: 0.9em;
+                margin-top: 1em;
+            }
+            .backlink a {
+                color: #007bff;
+                text-decoration: none;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>LEXI Scheduling</h1>
+        <div style="color:#666; font-size:0.95em;">Live view of scheduled Lexi Live jobs</div>
+
+        <div id="calendarWrapper">
+            <div id="calendar"></div>
+        </div>
+
+        <div class="backlink">
+            <a href="/">← Back to Control Panel</a>
+        </div>
+
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var calEl = document.getElementById('calendar');
+            var calendar = new FullCalendar.Calendar(calEl, {
+                initialView: 'dayGridMonth',
+                timeZone: 'Australia/Sydney',
+                height: 'auto',
+                headerToolbar: {
+                    left: 'prev,next today',
+                    center: 'title',
+                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                },
+                events: function(fetchInfo, successCallback, failureCallback) {
+                    const params = new URLSearchParams({
+                        start: fetchInfo.startStr,
+                        end: fetchInfo.endStr
+                    });
+                    fetch('/events.json?' + params, {
+                        credentials: 'include' // send cookies so PIN lock still applies
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.error === "locked") {
+                            alert("Session locked. Please re-enter PIN.");
+                            window.location = "/";
+                            return;
+                        }
+                        successCallback(data);
+                    })
+                    .catch(err => failureCallback(err));
+                }
+            });
+            calendar.render();
+        });
+        </script>
     </body>
     </html>
     """
@@ -368,8 +502,8 @@ def turn_off():
 @app.route("/status.json", methods=["GET"])
 def status_json():
     """
-    Called by auto-refresh JS.
-    Must also be PIN-protected.
+    Called by auto-refresh JS on the main page.
+    Also PIN-protected.
     """
     if not is_authorized(request):
         # Return 403 JSON so the frontend knows it's locked again.
@@ -383,125 +517,131 @@ def status_json():
     })
 
 
-# -------------------
-# ENTRY POINT
-# -------------------
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
-
-from flask import Flask, request, make_response, jsonify
-import requests, datetime, pytz
-
-# --- Add below your existing config ---
-EEG_API_URL = "https://www.eegcloud.tv/events"
-EEG_USERNAME = "api_key"        # same as before
-EEG_KEY = "<YOUR_REAL_API_KEY>" # same as before
-
-# --- PIN check helper (reuse your current logic) ---
-def is_unlocked(req):
-    return req.cookies.get("access_granted") == "true"
-
-# --- Calendar Page ---
-@app.route("/calendar")
+@app.route("/calendar", methods=["GET"])
 def calendar_page():
-    if not is_unlocked(request):
-        # reuse your existing PIN entry page logic here
-        return pin_page()
-
-    return """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>LEXI Scheduling</title>
-        <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet">
-        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
-        <style>
-            body { font-family: Arial, sans-serif; background:#fafafa; padding:20px; text-align:center; }
-            #calendar { max-width: 900px; margin: 40px auto; background:white; border-radius: 12px; padding: 10px; box-shadow:0 2px 8px rgba(0,0,0,0.1); }
-        </style>
-    </head>
-    <body>
-        <h1>LEXI Scheduling</h1>
-        <div id="calendar"></div>
-        <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                var calendarEl = document.getElementById('calendar');
-                var calendar = new FullCalendar.Calendar(calendarEl, {
-                    initialView: 'dayGridMonth',
-                    timeZone: 'Australia/Sydney',
-                    height: 'auto',
-                    headerToolbar: {
-                        left: 'prev,next today',
-                        center: 'title',
-                        right: 'dayGridMonth,timeGridWeek,timeGridDay'
-                    },
-                    events: function(fetchInfo, successCallback, failureCallback) {
-                        const params = new URLSearchParams({
-                            start: fetchInfo.startStr,
-                            end: fetchInfo.endStr
-                        });
-                        fetch('/events.json?' + params)
-                            .then(response => response.json())
-                            .then(data => successCallback(data))
-                            .catch(err => failureCallback(err));
-                    }
-                });
-                calendar.render();
-            });
-        </script>
-    </body>
-    </html>
     """
+    Show the scheduling calendar (read-only).
+    PIN-protected with the same cookie logic.
+    """
+    if not is_authorized(request):
+        return render_lock_page()
+    return render_calendar_page()
 
-# --- Events Data Feed ---
-@app.route("/events.json")
+
+@app.route("/events.json", methods=["GET"])
 def events_feed():
-    if not is_unlocked(request):
-        return jsonify({"error": "forbidden"}), 403
+    """
+    Returns scheduled events for FullCalendar (read-only).
+    Calls the EEG scheduling API:
+    GET /events?duration_start=...&duration_end=...&calculate_recurrences=true
+    """
+    if not is_authorized(request):
+        return jsonify({"error": "locked"}), 403
 
+    # FullCalendar gives us ISO8601-ish date strings.
+    # We'll parse them, assume Australia/Sydney, convert to epoch seconds.
     start_str = request.args.get("start")
     end_str = request.args.get("end")
     if not start_str or not end_str:
         return jsonify([])
 
-    # Convert ISO date → epoch seconds
-    tz = pytz.timezone("Australia/Sydney")
-    start_ts = int(tz.localize(datetime.datetime.fromisoformat(start_str)).timestamp())
-    end_ts = int(tz.localize(datetime.datetime.fromisoformat(end_str)).timestamp())
+    def parse_iso_loose(s):
+        # remove trailing 'Z' if present because fromisoformat can't handle 'Z'
+        s = (s or "").replace("Z", "")
+        # fromisoformat gives naive datetime (no tz)
+        return datetime.datetime.fromisoformat(s)
 
-    eeg_url = f"{EEG_API_URL}?duration_start={start_ts}&duration_end={end_ts}&calculate_recurrences=true"
-    resp = requests.get(eeg_url, auth=(EEG_USERNAME, EEG_KEY))
-    if resp.status_code != 200:
+    tz = pytz.timezone("Australia/Sydney")
+    try:
+        start_dt_local = tz.localize(parse_iso_loose(start_str))
+        end_dt_local   = tz.localize(parse_iso_loose(end_str))
+    except Exception:
+        return jsonify([])
+
+    start_ts = int(start_dt_local.timestamp())
+    end_ts   = int(end_dt_local.timestamp())
+
+    params = {
+        "duration_start": start_ts,
+        "duration_end": end_ts,
+        "calculate_recurrences": "true"
+    }
+
+    try:
+        resp = requests.get(
+            SCHED_BASE,
+            params=params,
+            auth=(API_USERNAME, API_KEY),
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+    except Exception:
+        return jsonify([])
+
+    if not resp.ok:
         return jsonify([])
 
     data = resp.json()
-    events = []
+
+    cal_events = []
+
     for ev in data.get("events", []):
-        # Try ICS parsing first for accurate timezone
-        ics = ev.get("ics", "")
+        ics = ev.get("ics", "") or ""
         title = "LEXI Booking"
+
+        # Try to read SUMMARY from ICS
         if "SUMMARY:" in ics:
-            title = ics.split("SUMMARY:")[1].split("\r\n")[0].strip()
-        if "DTSTART;TZID=Australia/Sydney:" in ics:
-            start_raw = ics.split("DTSTART;TZID=Australia/Sydney:")[1].split("\r\n")[0].strip()
-            start_fmt = datetime.datetime.strptime(start_raw, "%Y%m%dT%H%M%S")
-            start_dt = tz.localize(start_fmt)
-        else:
-            start_dt = datetime.datetime.fromtimestamp(ev["start_time"], tz)
+            try:
+                after = ics.split("SUMMARY:", 1)[1]
+                title_line = after.split("\r\n", 1)[0]
+                if title_line.strip():
+                    title = title_line.strip()
+            except Exception:
+                pass
 
-        if "DTEND;TZID=Australia/Sydney:" in ics:
-            end_raw = ics.split("DTEND;TZID=Australia/Sydney:")[1].split("\r\n")[0].strip()
-            end_fmt = datetime.datetime.strptime(end_raw, "%Y%m%dT%H%M%S")
-            end_dt = tz.localize(end_fmt)
-        else:
-            end_dt = datetime.datetime.fromtimestamp(ev["end_time"], tz)
+        # Helper to extract DTSTART/DTEND with TZID=Australia/Sydney
+        def extract_dt(tag):
+            marker = f"{tag};TZID=Australia/Sydney:"
+            if marker in ics:
+                try:
+                    raw = ics.split(marker, 1)[1].split("\r\n", 1)[0].strip()
+                    dt_naive = datetime.datetime.strptime(raw, "%Y%m%dT%H%M%S")
+                    return tz.localize(dt_naive)
+                except Exception:
+                    return None
+            return None
 
-        events.append({
+        start_dt = extract_dt("DTSTART")
+        end_dt   = extract_dt("DTEND")
+
+        # Fallback to API-provided epoch times if ICS parse fails
+        if not start_dt:
+            start_epoch = ev.get("start_time")
+            if start_epoch is not None:
+                start_dt = datetime.datetime.fromtimestamp(start_epoch, tz)
+
+        if not end_dt:
+            end_epoch = ev.get("end_time")
+            if end_epoch is not None:
+                end_dt = datetime.datetime.fromtimestamp(end_epoch, tz)
+
+        # If still missing, skip this event
+        if not start_dt or not end_dt:
+            continue
+
+        cal_events.append({
             "title": title,
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat()
         })
 
-    return jsonify(events)
+    return jsonify(cal_events)
+
+
+# -------------------
+# ENTRY POINT
+# -------------------
+
+if __name__ == "__main__":
+    # Local dev. On Render, Gunicorn will serve app, so this won't run.
+    app.run(host="0.0.0.0", port=8080)
