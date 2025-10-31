@@ -1,6 +1,6 @@
 import os
 import requests
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 from markupsafe import escape
 
 app = Flask(__name__)
@@ -9,24 +9,27 @@ app = Flask(__name__)
 EEG_BASE = "https://www.eegcloud.tv/speech-recognition/live/v2"
 INSTANCE_ID = "asr_instance_EUwk84qjnygKawQK"  # Lexi Live test
 API_USERNAME = "api_key"
-API_KEY = os.environ.get("EEG_API_KEY")  # set in Render env vars
+API_KEY = os.environ.get("EEG_API_KEY")  # stored in Render env vars
 
 
-def eeg_status():
+def fetch_instance_info():
     """
-    Ask EEG for current state of our Lexi instance.
-    Returns a dict with (name, state, last_updated_timestamp, etc) or None on failure.
+    Low-level helper.
+    Returns the full instance dict for INSTANCE_ID (or None on error).
     """
     if not API_KEY:
         return None
 
     url = f"{EEG_BASE}/instances?get_history=0"
-    resp = requests.get(
-        url,
-        auth=(API_USERNAME, API_KEY),
-        headers={"Accept": "application/json"},
-        timeout=10,
-    )
+    try:
+        resp = requests.get(
+            url,
+            auth=(API_USERNAME, API_KEY),
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+    except Exception:
+        return None
 
     if not resp.ok:
         return None
@@ -35,14 +38,27 @@ def eeg_status():
     for inst in data.get("all_instances", []):
         if inst.get("instance_id") == INSTANCE_ID:
             return inst
-
     return None
+
+
+def eeg_status():
+    """
+    Friendly wrapper.
+    Returns (instance_name, instance_state).
+    """
+    info = fetch_instance_info()
+    if not info:
+        return ("Lexi Live test", "UNKNOWN")
+
+    instance_name = info.get("settings", {}).get("name", "Unknown instance")
+    instance_state = info.get("state", "UNKNOWN")
+    return (instance_name, instance_state)
 
 
 def eeg_post(action):
     """
     POST /turn_on or /turn_off for our Lexi instance.
-    Returns (ok:boolean, short_msg:str)
+    Returns (ok:boolean, msg:str)
     """
     if action not in ("turn_on", "turn_off"):
         abort(400, "Invalid action")
@@ -51,13 +67,19 @@ def eeg_post(action):
         abort(500, "EEG_API_KEY is not set on the server")
 
     url = f"{EEG_BASE}/instances/{INSTANCE_ID}/{action}"
-    resp = requests.post(
-        url,
-        auth=(API_USERNAME, API_KEY),
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
-        json={},  # body can be empty; API still wants JSON
-        timeout=10,
-    )
+    try:
+        resp = requests.post(
+            url,
+            auth=(API_USERNAME, API_KEY),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            json={},
+            timeout=10,
+        )
+    except Exception as e:
+        return False, f"Request error: {e}"
 
     if resp.ok:
         if action == "turn_on":
@@ -68,47 +90,78 @@ def eeg_post(action):
         return False, f"Request failed ({resp.status_code})"
 
 
-def render_home(status_info, flash_msg=None):
+def pick_badge_color(state_text):
     """
-    Build the HTML page.
-    status_info is whatever eeg_status() returned (or None).
-    flash_msg is a short status string from last ON/OFF click.
+    Decide pill color for a given state.
     """
-
-    if status_info:
-        instance_name = status_info.get("settings", {}).get("name", "Unknown instance")
-        instance_state = status_info.get("state", "UNKNOWN")
-    else:
-        instance_name = "Lexi Live test"
-        instance_state = "UNKNOWN"
-
-    # Choose badge color:
-    st_upper = (instance_state or "UNKNOWN").upper()
+    st_upper = (state_text or "UNKNOWN").upper()
     if st_upper in ("ON", "RUNNING", "ACTIVE"):
-        badge_color = "#28a745"  # green
+        return "#28a745"  # green
     elif st_upper in ("OFF", "STOPPED", "IDLE"):
-        badge_color = "#dc3545"  # red
+        return "#dc3545"  # red
     else:
-        # The API sometimes leaves "state": "ON" even though the session is TERMINATED.
-        # We'll treat anything else as "amber/grey" to warn it's in-between.
-        badge_color = "#6c757d"  # grey
+        return "#6c757d"  # grey/unknown
 
-    safe_flash = escape(flash_msg) if flash_msg else "No API key is shown here. All control happens server-side."
 
-    # Very basic inline-styled HTML so we don't need any extra files.
+def render_home(flash_msg=None):
+    """
+    Build the HTML page with inline JS that auto-refreshes status.
+    """
+    instance_name, instance_state = eeg_status()
+    badge_color = pick_badge_color(instance_state)
+
+    safe_flash = (
+        escape(flash_msg)
+        if flash_msg
+        else "No API key is shown here. All control happens server-side."
+    )
+
+    # Note the <span id="stateText"> and <div id="stateBadge"> wrappers.
+    # JS will update those in-place every 10 seconds.
     return f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="utf-8"/>
         <title>Lexi Live Control</title>
+        <script>
+        async function refreshStatus() {{
+            try {{
+                const res = await fetch('/status.json', {{ cache: 'no-store' }});
+                if (!res.ok) return;
+                const data = await res.json();
+
+                // Update text
+                const stateEl = document.getElementById('stateText');
+                const nameEl  = document.getElementById('instanceName');
+                const badgeEl = document.getElementById('stateBadge');
+
+                if (stateEl && data.state) {{
+                    stateEl.textContent = data.state;
+                }}
+                if (nameEl && data.name) {{
+                    nameEl.textContent = data.name;
+                }}
+                if (badgeEl && data.badge_color) {{
+                    badgeEl.style.background = data.badge_color;
+                }}
+            }} catch (e) {{
+                // swallow errors silently
+            }}
+        }}
+
+        // Poll every 10 seconds
+        setInterval(refreshStatus, 10000);
+        // Also do one immediate refresh on load
+        window.addEventListener('load', refreshStatus);
+        </script>
     </head>
     <body style="font-family:sans-serif; max-width:400px; margin:40px auto; text-align:center;">
 
         <h1 style="margin-bottom:0.25em;">Lexi Live Control</h1>
-        <p style="color:#666;margin:0 0 1em 0;">Instance: {instance_name}</p>
+        <p style="color:#666;margin:0 0 1em 0;">Instance: <span id="instanceName">{instance_name}</span></p>
 
-        <div style="
+        <div id="stateBadge" style="
             margin-bottom:1em;
             font-size:0.9em;
             color:#fff;
@@ -116,7 +169,7 @@ def render_home(status_info, flash_msg=None):
             display:inline-block;
             padding:4px 10px;
             border-radius:6px;">
-            State: {instance_state}
+            State: <span id="stateText">{instance_state}</span>
         </div>
 
         <form action="/on" method="post" style="margin:1em 0;">
@@ -156,26 +209,35 @@ def render_home(status_info, flash_msg=None):
 
 @app.route("/", methods=["GET"])
 def home():
-    info = eeg_status()
-    return render_home(info)
+    return render_home()
 
 
 @app.route("/on", methods=["POST"])
 def turn_on():
     ok, msg = eeg_post("turn_on")
-
-    # After sending ON, ask EEG again so we show updated state
-    info = eeg_status()
-    # Even if eeg_status() still reports "ON" / "OFF" weirdly, we still surface msg.
-    return render_home(info, flash_msg=msg if ok else msg)
+    # We don't force-refresh state server-side here anymore,
+    # because the browser will poll /status.json anyway.
+    return render_home(msg if ok else msg)
 
 
 @app.route("/off", methods=["POST"])
 def turn_off():
     ok, msg = eeg_post("turn_off")
+    return render_home(msg if ok else msg)
 
-    info = eeg_status()
-    return render_home(info, flash_msg=msg if ok else msg)
+
+@app.route("/status.json", methods=["GET"])
+def status_json():
+    """
+    Lightweight status endpoint used by JS polling.
+    Returns current state + badge color.
+    """
+    name, state = eeg_status()
+    return jsonify({
+        "name": name,
+        "state": state,
+        "badge_color": pick_badge_color(state),
+    })
 
 
 if __name__ == "__main__":
