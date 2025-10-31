@@ -511,27 +511,27 @@ def render_calendar_page():
                 },
 
                 eventDidMount: function(info) {
-                    // attach hover handlers for tooltip
-                    info.el.addEventListener('mouseenter', function(ev) {
-                        const title = info.event.title || '(no title)';
-                        const startStr = fmtDateTime(info.event.startStr);
-                        const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
-                        let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
-                        if (endStr) {
-                            tipHtml += ' → ' + endStr;
-                        }
-                        showTooltip(ev, tipHtml);
-                    });
-                    info.el.addEventListener('mousemove', function(ev) {
-                        if (tooltipEl.style.display === 'block') {
-                            tooltipEl.style.left = (ev.pageX + 10) + 'px';
-                            tooltipEl.style.top  = (ev.pageY + 10) + 'px';
-                        }
-                    });
-                    info.el.addEventListener('mouseleave', function() {
-                        hideTooltip();
-                    });
-                },
+    // kill the default browser/FullCalendar tooltip so it doesn't spawn that off-to-the-right popover
+    info.el.removeAttribute('title');
+
+    // attach hover handlers for OUR tooltip
+    info.el.addEventListener('mouseenter', function(ev) {
+        const title = info.event.title || '(no title)';
+        const startStr = fmtDateTime(info.event.startStr);
+        const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
+        let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
+        if (endStr) {
+            tipHtml += ' → ' + endStr;
+        }
+
+        showTooltip(ev, tipHtml);
+    });
+
+    info.el.addEventListener('mouseleave', function() {
+        hideTooltip();
+    });
+}
+
 
                 eventClick: function(info) {
                     info.jsEvent.preventDefault();
