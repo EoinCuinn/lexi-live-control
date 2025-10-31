@@ -18,7 +18,7 @@ ACCESS_PIN = os.environ.get("ACCESS_PIN", "2065")
 
 app = Flask(__name__)
 
-# Flask session signing key: set SECRET_KEY in Render env for better security
+# Flask session signing key
 app.secret_key = os.environ.get("SECRET_KEY", "CHANGE-ME-LATER")
 
 
@@ -32,7 +32,6 @@ def is_authorized(req: request) -> bool:
     We store a signed cookie 'auth_ok' = 'yes'.
     """
     auth_ok = req.cookies.get("auth_ok", "")
-    # If cookie is 'yes', they're in.
     return auth_ok == "yes"
 
 
@@ -134,42 +133,47 @@ def pick_badge_color(state_text):
 
 def render_lock_page(error_msg=None):
     """
-    HTML shown when user is not yet unlocked.
-    A simple PIN form.
+    PIN gate screen. Clean, client-facing.
+    - No AVE staff footer.
+    - If there's an error, show it as red text (no raw HTML).
     """
     safe_error = escape(error_msg) if error_msg else ""
+    error_block = (
+        f"<p style='color:#dc3545; font-weight:bold; margin-top:1em;'>{safe_error}</p>"
+        if safe_error
+        else ""
+    )
+
     return f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="utf-8"/>
-        <title>Lexi Live Control - Locked</title>
+        <title>Access PIN Required</title>
     </head>
     <body style="font-family:sans-serif; max-width:360px; margin:60px auto; text-align:center;">
         <h1 style="margin-bottom:0.5em;">Access PIN Required</h1>
         <p style="color:#666; margin-top:0;">Enter PIN to control Lexi Live.</p>
 
-        {"<p style='color:#dc3545; font-weight:bold;'>" + safe_error + "</p>" if safe_error else ""}
+        {error_block}
 
         <form method="post" action="/unlock" style="margin-top:1.5em;">
             <input
                 type="password"
                 name="pin"
                 placeholder="PIN"
-                style="font-size:1.2em; padding:0.5em 0.75em; width:200px; text-align:center; border-radius:6px; border:1px solid #aaa;"
+                style="font-size:1.2em; padding:0.5em 0.75em; width:200px;
+                       text-align:center; border-radius:6px; border:1px solid #aaa;"
                 autofocus
             />
             <div style="margin-top:1em;">
                 <button
-                    style="font-size:1.1em; padding:0.6em 1.2em; border-radius:6px; border:0; background:#007bff; color:#fff; cursor:pointer;">
+                    style="font-size:1.1em; padding:0.6em 1.2em; border-radius:6px;
+                           border:0; background:#007bff; color:#fff; cursor:pointer;">
                     Unlock
                 </button>
             </div>
         </form>
-
-        <p style="font-size:0.8em;color:#999;margin-top:2em;">
-            This panel is restricted to AVE staff.
-        </p>
     </body>
     </html>
     """
@@ -177,17 +181,17 @@ def render_lock_page(error_msg=None):
 
 def render_home(flash_msg=None):
     """
-    Full control panel HTML (only shown if authorized).
-    Includes auto-refresh JS.
+    Control panel HTML (only shown if authorized).
+    Includes:
+    - instance name
+    - live state pill that auto-refreshes
+    - ON/OFF buttons
+    - Lock Panel button
     """
     instance_name, instance_state = eeg_status()
     badge_color = pick_badge_color(instance_state)
 
-    safe_flash = (
-        escape(flash_msg)
-        if flash_msg
-        else "Control panel is live. PIN verified."
-    )
+    safe_flash = escape(flash_msg) if flash_msg else "PIN accepted."
 
     return f"""
     <!DOCTYPE html>
@@ -273,7 +277,7 @@ def render_home(flash_msg=None):
             </button>
         </form>
 
-        <p style="font-size:0.8em;color:#999;margin-top:2em;">
+        <p style="font-size:0.9em;color:#444;margin-top:2em;">
             {safe_flash}
         </p>
 
@@ -317,10 +321,13 @@ def unlock():
     """
     submitted_pin = request.form.get("pin", "").strip()
     if check_pin(submitted_pin):
-        # Set a cookie auth_ok=yes
         resp = make_response(redirect("/"))
-        # httponly stops JS from reading cookie; path=/ so it's valid everywhere
-        resp.set_cookie("auth_ok", "yes", httponly=True, samesite="Lax")
+        resp.set_cookie(
+            "auth_ok",
+            "yes",
+            httponly=True,
+            samesite="Lax"
+        )
         return resp
     else:
         return render_lock_page(error_msg="Incorrect PIN")
@@ -330,10 +337,15 @@ def unlock():
 def relock():
     """
     User presses "Lock Panel".
-    Clear auth cookie.
+    Clear auth cookie and show PIN screen again.
     """
-    resp = make_response(render_lock_page("Panel locked. Enter PIN again."))
-    resp.set_cookie("auth_ok", "", httponly=True, samesite="Lax")
+    resp = make_response(render_lock_page(error_msg="Panel locked. Enter PIN again."))
+    resp.set_cookie(
+        "auth_ok",
+        "",
+        httponly=True,
+        samesite="Lax"
+    )
     return resp
 
 
@@ -376,5 +388,4 @@ def status_json():
 # -------------------
 
 if __name__ == "__main__":
-    # local dev
     app.run(host="0.0.0.0", port=8080)
