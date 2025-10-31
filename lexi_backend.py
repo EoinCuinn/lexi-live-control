@@ -475,85 +475,86 @@ def render_calendar_page():
                 tooltipEl.style.display = 'none';
             }
 
-            var calEl = document.getElementById('calendar');
-            var calendar = new FullCalendar.Calendar(calEl, {
-                initialView: 'dayGridMonth',
-                timeZone: 'Australia/Sydney',
-                height: 'auto',
-                headerToolbar: {
-                    left: 'prev,next today',
-                    center: 'title',
-                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
-                },
+           var calEl = document.getElementById('calendar');
+var calendar = new FullCalendar.Calendar(calEl, {
+    initialView: 'dayGridMonth',
+    timeZone: 'Australia/Sydney',
+    height: 'auto',
+    headerToolbar: {
+        left: 'prev,next today',
+        center: 'title',
+        right: 'dayGridMonth,timeGridWeek,timeGridDay'
+    },
 
-                // Use 24h time everywhere we can
-                eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
-                slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+    // Use 24h time everywhere we can
+    eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+    slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
 
-                events: function(fetchInfo, successCallback, failureCallback) {
-                    const params = new URLSearchParams({
-                        start: fetchInfo.startStr,
-                        end: fetchInfo.endStr
-                    });
-                    fetch('/events.json?' + params, {
-                        credentials: 'include' // send cookies so PIN lock still applies
-                    })
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data.error === "locked") {
-                            alert("Session locked. Please re-enter PIN.");
-                            window.location = "/";
-                            return;
-                        }
-                        successCallback(data);
-                    })
-                    .catch(err => failureCallback(err));
-                },
+    events: function(fetchInfo, successCallback, failureCallback) {
+        const params = new URLSearchParams({
+            start: fetchInfo.startStr,
+            end: fetchInfo.endStr
+        });
+        fetch('/events.json?' + params, {
+            credentials: 'include' // send cookies so PIN lock still applies
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error === "locked") {
+                alert("Session locked. Please re-enter PIN.");
+                window.location = "/";
+                return;
+            }
+            successCallback(data);
+        })
+        .catch(err => failureCallback(err));
+    },
 
-                eventDidMount: function(info) {
-    // kill the default browser/FullCalendar tooltip so it doesn't spawn that off-to-the-right popover
-    info.el.removeAttribute('title');
+    eventDidMount: function(info) {
+        // kill default tooltip/popover so our custom one can take over
+        info.el.removeAttribute('title');
 
-    // attach hover handlers for OUR tooltip
-    info.el.addEventListener('mouseenter', function(ev) {
+        // attach hover handlers for custom tooltip
+        info.el.addEventListener('mouseenter', function(ev) {
+            const title = info.event.title || '(no title)';
+            const startStr = fmtDateTime(info.event.startStr);
+            const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
+            let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
+            if (endStr) {
+                tipHtml += ' → ' + endStr;
+            }
+
+            // still calling the old showTooltip for now
+            showTooltip(ev, tipHtml);
+        });
+
+        info.el.addEventListener('mouseleave', function() {
+            hideTooltip();
+        });
+    },
+
+    eventClick: function(info) {
+        info.jsEvent.preventDefault();
         const title = info.event.title || '(no title)';
         const startStr = fmtDateTime(info.event.startStr);
         const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
-        let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
+        const desc = info.event.extendedProps && info.event.extendedProps.description
+            ? info.event.extendedProps.description
+            : '';
+
+        let msg = title + "\n" + startStr;
         if (endStr) {
-            tipHtml += ' → ' + endStr;
+            msg += " → " + endStr;
         }
+        if (desc) {
+            msg += "\n\n" + desc;
+        }
+        alert(msg);
+    }
+});
 
-        showTooltip(ev, tipHtml);
-    });
+calendar.render();
 
-    info.el.addEventListener('mouseleave', function() {
-        hideTooltip();
-    });
-}
-
-
-                eventClick: function(info) {
-                    info.jsEvent.preventDefault();
-                    const title = info.event.title || '(no title)';
-                    const startStr = fmtDateTime(info.event.startStr);
-                    const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
-                    const desc = info.event.extendedProps && info.event.extendedProps.description
-                        ? info.event.extendedProps.description
-                        : '';
-
-                    let msg = title + "\\n" + startStr;
-                    if (endStr) {
-                        msg += " → " + endStr;
-                    }
-                    if (desc) {
-                        msg += "\\n\\n" + desc;
-                    }
-                    alert(msg);
-                }
-            });
-
-            calendar.render();
         });
         </script>
     </body>
