@@ -416,147 +416,122 @@ def render_calendar_page():
         </div>
 
         <script>
-        document.addEventListener('DOMContentLoaded', function() {
+        <script>
+document.addEventListener('DOMContentLoaded', function() {
 
-            const tooltipEl = document.getElementById('fc-tooltip');
+    const tooltipEl = document.getElementById('fc-tooltip');
 
-            function fmtDateTime(isoStr) {
-                // isoStr is like "2025-11-01T17:30:00+11:00"
-                // We turn it into "01 Nov 2025 17:30"
-                const d = new Date(isoStr);
-                const pad = n => n.toString().padStart(2,'0');
-                const day = pad(d.getDate());
-                const mon = d.toLocaleString('en-AU', { month: 'short' });
-                const yr  = d.getFullYear();
-                const hr  = pad(d.getHours());
-                const min = pad(d.getMinutes());
-                return day + ' ' + mon + ' ' + yr + ' ' + hr + ':' + min;
-            }
-            function showTooltip(jsEvent, html) {
-    // remove DEBUG POS now that we know deployment is live
-    tooltipEl.innerHTML = html;
-    tooltipEl.style.display = 'block';
-
-    const wrapperEl = document.getElementById('calendarWrapper');
-
-    // bounding boxes
-    const wrapperRect = wrapperEl.getBoundingClientRect();
-    const eventRect   = (jsEvent.currentTarget || jsEvent.target).getBoundingClientRect();
-
-    // Figure out where to put the tooltip:
-    // We'll try to sit it just above the event box, centered horizontally.
-    const tooltipWidth  = tooltipEl.offsetWidth || 120;
-    const tooltipHeight = tooltipEl.offsetHeight || 40;
-
-    // event box center X relative to wrapper
-    const centerX =
-        (eventRect.left + eventRect.width / 2) - wrapperRect.left;
-
-    // default top = above event
-    let top =
-        (eventRect.top - wrapperRect.top) - tooltipHeight - 8;
-
-    // if that would go off the top of the wrapper, flip it below the event
-    if (top < 0) {
-        top =
-            (eventRect.bottom - wrapperRect.top) + 8;
+    function fmtDateTime(isoStr) {
+        // isoStr is like "2025-11-01T17:30:00+11:00"
+        // We turn it into "01 Nov 2025 17:30"
+        const d = new Date(isoStr);
+        const pad = n => n.toString().padStart(2,'0');
+        const day = pad(d.getDate());
+        const mon = d.toLocaleString('en-AU', { month: 'short' });
+        const yr  = d.getFullYear();
+        const hr  = pad(d.getHours());
+        const min = pad(d.getMinutes());
+        return day + ' ' + mon + ' ' + yr + ' ' + hr + ':' + min;
     }
 
-    // left should center the tooltip horizontally over the event
-    let left = centerX - (tooltipWidth / 2);
+    // TEMP basic tooltip position (we'll improve in the next step)
+    function showTooltip(jsEvent, html) {
+        tooltipEl.innerHTML = html;
+        tooltipEl.style.display = 'block';
 
-    // apply
-    tooltipEl.style.left = left + 'px';
-    tooltipEl.style.top  = top  + 'px';
-}
+        // just stick it near the mouse for now so it's visible
+        tooltipEl.style.left = (jsEvent.pageX + 10) + 'px';
+        tooltipEl.style.top  = (jsEvent.pageY + 10) + 'px';
+    }
 
+    function hideTooltip() {
+        tooltipEl.style.display = 'none';
+    }
 
-            function hideTooltip() {
-                tooltipEl.style.display = 'none';
-            }
+    var calEl = document.getElementById('calendar');
+    var calendar = new FullCalendar.Calendar(calEl, {
+        initialView: 'dayGridMonth',
+        timeZone: 'Australia/Sydney',
+        height: 'auto',
+        headerToolbar: {
+            left: 'prev,next today',
+            center: 'title',
+            right: 'dayGridMonth,timeGridWeek,timeGridDay'
+        },
 
-           var calEl = document.getElementById('calendar');
-var calendar = new FullCalendar.Calendar(calEl, {
-    initialView: 'dayGridMonth',
-    timeZone: 'Australia/Sydney',
-    height: 'auto',
-    headerToolbar: {
-        left: 'prev,next today',
-        center: 'title',
-        right: 'dayGridMonth,timeGridWeek,timeGridDay'
-    },
+        // Use 24h time everywhere we can
+        eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+        slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
 
-    // Use 24h time everywhere we can
-    eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
-    slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+        events: function(fetchInfo, successCallback, failureCallback) {
+            const params = new URLSearchParams({
+                start: fetchInfo.startStr,
+                end: fetchInfo.endStr
+            });
+            fetch('/events.json?' + params, {
+                credentials: 'include' // send cookies so PIN lock still applies
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.error === "locked") {
+                    alert("Session locked. Please re-enter PIN.");
+                    window.location = "/";
+                    return;
+                }
+                successCallback(data);
+            })
+            .catch(err => failureCallback(err));
+        },
 
-    events: function(fetchInfo, successCallback, failureCallback) {
-        const params = new URLSearchParams({
-            start: fetchInfo.startStr,
-            end: fetchInfo.endStr
-        });
-        fetch('/events.json?' + params, {
-            credentials: 'include' // send cookies so PIN lock still applies
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.error === "locked") {
-                alert("Session locked. Please re-enter PIN.");
-                window.location = "/";
-                return;
-            }
-            successCallback(data);
-        })
-        .catch(err => failureCallback(err));
-    },
+        eventDidMount: function(info) {
+            // kill the browser/FullCalendar default tooltip,
+            // so we don't get that black popup floating off to the right
+            info.el.removeAttribute('title');
 
-    eventDidMount: function(info) {
-        // kill default tooltip/popover so our custom one can take over
-        info.el.removeAttribute('title');
+            // our hover tooltip
+            info.el.addEventListener('mouseenter', function(ev) {
+                const title = info.event.title || '(no title)';
+                const startStr = fmtDateTime(info.event.startStr);
+                const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
+                let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
+                if (endStr) {
+                    tipHtml += ' → ' + endStr;
+                }
 
-        // attach hover handlers for custom tooltip
-        info.el.addEventListener('mouseenter', function(ev) {
+                showTooltip(ev, tipHtml);
+            });
+
+            info.el.addEventListener('mouseleave', function() {
+                hideTooltip();
+            });
+        },
+
+        eventClick: function(info) {
+            info.jsEvent.preventDefault();
             const title = info.event.title || '(no title)';
             const startStr = fmtDateTime(info.event.startStr);
             const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
-            let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
+            const desc = info.event.extendedProps && info.event.extendedProps.description
+                ? info.event.extendedProps.description
+                : '';
+
+            let msg = title + "\n" + startStr;
             if (endStr) {
-                tipHtml += ' → ' + endStr;
+                msg += " → " + endStr;
             }
-
-            // still calling the old showTooltip for now
-            showTooltip(ev, tipHtml);
-        });
-
-        info.el.addEventListener('mouseleave', function() {
-            hideTooltip();
-        });
-    },
-
-    eventClick: function(info) {
-        info.jsEvent.preventDefault();
-        const title = info.event.title || '(no title)';
-        const startStr = fmtDateTime(info.event.startStr);
-        const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
-        const desc = info.event.extendedProps && info.event.extendedProps.description
-            ? info.event.extendedProps.description
-            : '';
-
-        let msg = title + "\n" + startStr;
-        if (endStr) {
-            msg += " → " + endStr;
+            if (desc) {
+                msg += "\n\n" + desc;
+            }
+            alert(msg);
         }
-        if (desc) {
-            msg += "\n\n" + desc;
-        }
-        alert(msg);
-    }
+    });
+
+    calendar.render();
 });
+</script>
 
-calendar.render();
-
-        });
-        </script>
+        
+        
     </body>
     </html>
     """
