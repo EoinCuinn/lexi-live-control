@@ -39,7 +39,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "CHANGE-ME-LATER")
 def is_authorized(req: request) -> bool:
     """
     Check whether the user already passed the PIN.
-    We store a signed-ish cookie 'auth_ok' = 'yes'.
+    We store a cookie 'auth_ok' = 'yes'.
     """
     auth_ok = req.cookies.get("auth_ok", "")
     return auth_ok == "yes"
@@ -337,6 +337,10 @@ def render_calendar_page():
     Returns the calendar HTML page.
     Uses FullCalendar from a CDN.
     Relies on /events.json for data.
+    Adds:
+    - 24h time display
+    - hover tooltip
+    - click alert with details
     """
     return """
     <!DOCTYPE html>
@@ -366,6 +370,7 @@ def render_calendar_page():
                 box-shadow: 0 2px 10px rgba(0,0,0,0.08);
                 padding: 20px;
                 text-align: left;
+                position: relative;
             }
             #calendar {
                 max-width: 960px;
@@ -379,6 +384,22 @@ def render_calendar_page():
                 color: #007bff;
                 text-decoration: none;
             }
+
+            /* tooltip */
+            #fc-tooltip {
+                position: absolute;
+                z-index: 9999;
+                background: rgba(0,0,0,0.8);
+                color: #fff;
+                padding: 8px 10px;
+                border-radius: 6px;
+                font-size: 12px;
+                line-height: 1.4em;
+                pointer-events: none;
+                white-space: nowrap;
+                display: none;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+            }
         </style>
     </head>
     <body>
@@ -387,6 +408,7 @@ def render_calendar_page():
 
         <div id="calendarWrapper">
             <div id="calendar"></div>
+            <div id="fc-tooltip"></div>
         </div>
 
         <div class="backlink">
@@ -395,6 +417,35 @@ def render_calendar_page():
 
         <script>
         document.addEventListener('DOMContentLoaded', function() {
+
+            const tooltipEl = document.getElementById('fc-tooltip');
+
+            function fmtDateTime(isoStr) {
+                // isoStr is like "2025-11-01T17:30:00+11:00"
+                // We turn it into "01 Nov 2025 17:30"
+                const d = new Date(isoStr);
+                const pad = n => n.toString().padStart(2,'0');
+                const day = pad(d.getDate());
+                const mon = d.toLocaleString('en-AU', { month: 'short' });
+                const yr  = d.getFullYear();
+                const hr  = pad(d.getHours());
+                const min = pad(d.getMinutes());
+                return day + ' ' + mon + ' ' + yr + ' ' + hr + ':' + min;
+            }
+
+            function showTooltip(jsEvent, html) {
+                tooltipEl.innerHTML = html;
+                tooltipEl.style.display = 'block';
+                const rect = jsEvent.target.getBoundingClientRect();
+                // place tooltip near mouse, offset a bit
+                tooltipEl.style.left = (jsEvent.pageX + 10) + 'px';
+                tooltipEl.style.top  = (jsEvent.pageY + 10) + 'px';
+            }
+
+            function hideTooltip() {
+                tooltipEl.style.display = 'none';
+            }
+
             var calEl = document.getElementById('calendar');
             var calendar = new FullCalendar.Calendar(calEl, {
                 initialView: 'dayGridMonth',
@@ -405,6 +456,11 @@ def render_calendar_page():
                     center: 'title',
                     right: 'dayGridMonth,timeGridWeek,timeGridDay'
                 },
+
+                // Use 24h time everywhere we can
+                eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+                slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+
                 events: function(fetchInfo, successCallback, failureCallback) {
                     const params = new URLSearchParams({
                         start: fetchInfo.startStr,
@@ -423,8 +479,51 @@ def render_calendar_page():
                         successCallback(data);
                     })
                     .catch(err => failureCallback(err));
+                },
+
+                eventDidMount: function(info) {
+                    // attach hover handlers for tooltip
+                    info.el.addEventListener('mouseenter', function(ev) {
+                        const title = info.event.title || '(no title)';
+                        const startStr = fmtDateTime(info.event.startStr);
+                        const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
+                        let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
+                        if (endStr) {
+                            tipHtml += ' → ' + endStr;
+                        }
+                        showTooltip(ev, tipHtml);
+                    });
+                    info.el.addEventListener('mousemove', function(ev) {
+                        if (tooltipEl.style.display === 'block') {
+                            tooltipEl.style.left = (ev.pageX + 10) + 'px';
+                            tooltipEl.style.top  = (ev.pageY + 10) + 'px';
+                        }
+                    });
+                    info.el.addEventListener('mouseleave', function() {
+                        hideTooltip();
+                    });
+                },
+
+                eventClick: function(info) {
+                    info.jsEvent.preventDefault();
+                    const title = info.event.title || '(no title)';
+                    const startStr = fmtDateTime(info.event.startStr);
+                    const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
+                    const desc = info.event.extendedProps && info.event.extendedProps.description
+                        ? info.event.extendedProps.description
+                        : '';
+
+                    let msg = title + "\\n" + startStr;
+                    if (endStr) {
+                        msg += " → " + endStr;
+                    }
+                    if (desc) {
+                        msg += "\\n\\n" + desc;
+                    }
+                    alert(msg);
                 }
             });
+
             calendar.render();
         });
         </script>
@@ -534,12 +633,13 @@ def events_feed():
     Returns scheduled events for FullCalendar (read-only).
     Calls the EEG scheduling API:
     GET /events?duration_start=...&duration_end=...&calculate_recurrences=true
+
+    We also try to pull SUMMARY and DESCRIPTION from ICS so we can show
+    nicer details on hover and click.
     """
     if not is_authorized(request):
         return jsonify({"error": "locked"}), 403
 
-    # FullCalendar gives us ISO8601-ish date strings.
-    # We'll parse them, assume Australia/Sydney, convert to epoch seconds.
     start_str = request.args.get("start")
     end_str = request.args.get("end")
     if not start_str or not end_str:
@@ -582,20 +682,32 @@ def events_feed():
         return jsonify([])
 
     data = resp.json()
-
     cal_events = []
 
     for ev in data.get("events", []):
         ics = ev.get("ics", "") or ""
-        title = "LEXI Booking"
 
-        # Try to read SUMMARY from ICS
+        # Defaults
+        title = "LEXI Booking"
+        description = ""
+
+        # Try SUMMARY:
         if "SUMMARY:" in ics:
             try:
                 after = ics.split("SUMMARY:", 1)[1]
                 title_line = after.split("\r\n", 1)[0]
                 if title_line.strip():
                     title = title_line.strip()
+            except Exception:
+                pass
+
+        # Try DESCRIPTION:
+        if "DESCRIPTION:" in ics:
+            try:
+                after_d = ics.split("DESCRIPTION:", 1)[1]
+                desc_line = after_d.split("\r\n", 1)[0]
+                if desc_line.strip():
+                    description = desc_line.strip()
             except Exception:
                 pass
 
@@ -632,7 +744,10 @@ def events_feed():
         cal_events.append({
             "title": title,
             "start": start_dt.isoformat(),
-            "end": end_dt.isoformat()
+            "end": end_dt.isoformat(),
+            "extendedProps": {
+                "description": description
+            }
         })
 
     return jsonify(cal_events)
