@@ -432,29 +432,30 @@ def render_calendar_page():
                 const min = pad(d.getMinutes());
                 return day + ' ' + mon + ' ' + yr + ' ' + hr + ':' + min;
             }
-
             function showTooltip(jsEvent, html) {
     tooltipEl.innerHTML = html;
     tooltipEl.style.display = 'block';
 
-    // Use the entire event element instead of the inner target
-    const rect = jsEvent.currentTarget.getBoundingClientRect();
+    // Use the full event element (the calendar box itself)
+    const rect = jsEvent.currentTarget?.getBoundingClientRect?.() ||
+                 jsEvent.target.getBoundingClientRect();
 
     // Position above the event by default
-    const approxTooltipHeight = 40;
+    const approxTooltipHeight = tooltipEl.offsetHeight || 40;
     let top = window.scrollY + rect.top - approxTooltipHeight - 8;
 
-    // If it would go off the top of the screen, flip below
+    // If that would go off-screen, flip it below instead
     if (top < 0) {
         top = window.scrollY + rect.bottom + 8;
     }
 
-    // Center horizontally over the event box
-    let left = window.scrollX + rect.left + (rect.width / 2) - (tooltipEl.offsetWidth / 2);
+    // Center horizontally over the event
+    const left = window.scrollX + rect.left + (rect.width / 2) - (tooltipEl.offsetWidth / 2);
 
     tooltipEl.style.left = left + 'px';
     tooltipEl.style.top  = top + 'px';
 }
+
 
 
 
