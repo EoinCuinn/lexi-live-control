@@ -433,28 +433,24 @@ def render_calendar_page():
                 return day + ' ' + mon + ' ' + yr + ' ' + hr + ':' + min;
             }
             function showTooltip(jsEvent, html) {
+    // --- DEBUG MARKER SO WE KNOW THIS CODE IS LIVE ---
+    html = "DEBUG POS<br/>" + html;
+
     tooltipEl.innerHTML = html;
     tooltipEl.style.display = 'block';
 
-    // Use the full event element (the calendar box itself)
-    const rect = jsEvent.currentTarget?.getBoundingClientRect?.() ||
-                 jsEvent.target.getBoundingClientRect();
+    // Force anchor to the FULL event element. We don't trust target anymore.
+    const eventEl = jsEvent.currentTarget || jsEvent.target;
+    const rect = eventEl.getBoundingClientRect();
 
-    // Position above the event by default
-    const approxTooltipHeight = tooltipEl.offsetHeight || 40;
-    let top = window.scrollY + rect.top - approxTooltipHeight - 8;
-
-    // If that would go off-screen, flip it below instead
-    if (top < 0) {
-        top = window.scrollY + rect.bottom + 8;
-    }
-
-    // Center horizontally over the event
-    const left = window.scrollX + rect.left + (rect.width / 2) - (tooltipEl.offsetWidth / 2);
+    // Top-left corner of the event box (no centering yet)
+    const top  = window.scrollY + rect.top - 10;   // 10px above for now
+    const left = window.scrollX + rect.left;
 
     tooltipEl.style.left = left + 'px';
     tooltipEl.style.top  = top + 'px';
 }
+
 
 
 
