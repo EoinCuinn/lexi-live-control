@@ -433,26 +433,42 @@ def render_calendar_page():
                 return day + ' ' + mon + ' ' + yr + ' ' + hr + ':' + min;
             }
             function showTooltip(jsEvent, html) {
-    // --- DEBUG MARKER SO WE KNOW THIS CODE IS LIVE ---
-    html = "DEBUG POS<br/>" + html;
-
+    // remove DEBUG POS now that we know deployment is live
     tooltipEl.innerHTML = html;
     tooltipEl.style.display = 'block';
 
-    // Force anchor to the FULL event element. We don't trust target anymore.
-    const eventEl = jsEvent.currentTarget || jsEvent.target;
-    const rect = eventEl.getBoundingClientRect();
+    const wrapperEl = document.getElementById('calendarWrapper');
 
-    // Top-left corner of the event box (no centering yet)
-    const top  = window.scrollY + rect.top - 10;   // 10px above for now
-    const left = window.scrollX + rect.left;
+    // bounding boxes
+    const wrapperRect = wrapperEl.getBoundingClientRect();
+    const eventRect   = (jsEvent.currentTarget || jsEvent.target).getBoundingClientRect();
 
+    // Figure out where to put the tooltip:
+    // We'll try to sit it just above the event box, centered horizontally.
+    const tooltipWidth  = tooltipEl.offsetWidth || 120;
+    const tooltipHeight = tooltipEl.offsetHeight || 40;
+
+    // event box center X relative to wrapper
+    const centerX =
+        (eventRect.left + eventRect.width / 2) - wrapperRect.left;
+
+    // default top = above event
+    let top =
+        (eventRect.top - wrapperRect.top) - tooltipHeight - 8;
+
+    // if that would go off the top of the wrapper, flip it below the event
+    if (top < 0) {
+        top =
+            (eventRect.bottom - wrapperRect.top) + 8;
+    }
+
+    // left should center the tooltip horizontally over the event
+    let left = centerX - (tooltipWidth / 2);
+
+    // apply
     tooltipEl.style.left = left + 'px';
-    tooltipEl.style.top  = top + 'px';
+    tooltipEl.style.top  = top  + 'px';
 }
-
-
-
 
 
             function hideTooltip() {
