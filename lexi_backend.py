@@ -436,11 +436,27 @@ def render_calendar_page():
             function showTooltip(jsEvent, html) {
                 tooltipEl.innerHTML = html;
                 tooltipEl.style.display = 'block';
+
+                // Get the position/size of the calendar event element
                 const rect = jsEvent.target.getBoundingClientRect();
-                // place tooltip near mouse, offset a bit
-                tooltipEl.style.left = (jsEvent.pageX + 10) + 'px';
-                tooltipEl.style.top  = (jsEvent.pageY + 10) + 'px';
+                
+                // We'll try to put the tooltip just above the event.
+                // If there's no space above, we'll put it just below.
+                const approxTooltipHeight = 40; // px, rough guess
+                let top = window.scrollY + rect.top - approxTooltipHeight - 8;
+            
+                // If that would go off-screen (negative), flip it below the event
+                if (top < 0) {
+                    top = window.scrollY + rect.bottom + 8;
             }
+
+                // left edge aligned with the event box
+                let left = window.scrollX + rect.left;
+
+                tooltipEl.style.left = left + 'px';
+                tooltipEl.style.top  = top + 'px';
+            }
+
 
             function hideTooltip() {
                 tooltipEl.style.display = 'none';
