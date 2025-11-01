@@ -145,6 +145,141 @@ def pick_badge_color(state_text):
     else:
         return "#6c757d"  # grey / unknown
 
+def render_upcoming_page():
+    """
+    Read-only Upcoming Jobs view.
+    Shows all future jobs (next 30 days for now) in a scrollable table.
+    """
+    upcoming = get_upcoming_events()
+
+    if upcoming:
+        rows_html = ""
+        for row in upcoming:
+            # safely get values with .get() so we don't KeyError
+            date_str = row.get("date_str", "")
+            time_str = row.get("time_str", "")
+            title    = row.get("title", "")
+
+            rows_html += f"""
+            <tr>
+                <td style="padding:8px 10px; border-bottom:1px solid #eee; white-space:nowrap;">
+                    {escape(date_str)}
+                </td>
+                <td style="padding:8px 10px; border-bottom:1px solid #eee; white-space:nowrap;">
+                    {escape(time_str)}
+                </td>
+                <td style="padding:8px 10px; border-bottom:1px solid #eee;">
+                    {escape(title)}
+                </td>
+            </tr>
+            """
+    else:
+        rows_html = """
+        <tr>
+            <td colspan="3" style="padding:12px; text-align:center; color:#666;">
+                No upcoming jobs found.
+            </td>
+        </tr>
+        """
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8"/>
+        <title>Upcoming Jobs</title>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                background:#f5f5f5;
+                color:#222;
+                padding:30px 10px;
+                text-align:center;
+            }}
+            h1 {{
+                margin:0 0 .25em 0;
+                font-size:1.5em;
+                font-weight:600;
+                color:#000;
+            }}
+            .subhead {{
+                color:#666;
+                font-size:0.9em;
+                margin-bottom:1.5em;
+            }}
+            .frame {{
+                max-width:600px;
+                margin:0 auto;
+                background:#fff;
+                border-radius:12px;
+                box-shadow:0 2px 10px rgba(0,0,0,0.08);
+                padding:16px;
+                text-align:left;
+            }}
+            table {{
+                width:100%;
+                border-collapse:collapse;
+                font-size:0.9em;
+            }}
+            thead th {{
+                background:#f8f9fa;
+                text-align:left;
+                padding:8px 10px;
+                border-bottom:1px solid #ddd;
+                font-weight:600;
+                white-space:nowrap;
+            }}
+            tbody td {{
+                font-weight:400;
+            }}
+            .scroller {{
+                max-height:260px;
+                overflow-y:auto;
+                border:1px solid #eee;
+                border-radius:6px;
+            }}
+            .backlink {{
+                text-align:center;
+                margin-top:1.5em;
+                font-size:0.9em;
+            }}
+            .backlink a {{
+                color:#007bff;
+                text-decoration:none;
+            }}
+        </style>
+    </head>
+    <body>
+
+        <h1>Upcoming Jobs</h1>
+        <div class="subhead">Next scheduled Lexi Live bookings</div>
+
+        <div class="frame">
+            <div class="scroller">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width:30%;">Date</th>
+                            <th style="width:30%;">Time</th>
+                            <th style="width:40%;">Event</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows_html}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="backlink">
+            <a href="/">← Back to Control Panel</a>
+        </div>
+
+    </body>
+    </html>
+    """
+
+
 def get_upcoming_events():
     """
     Fetch upcoming scheduled Lexi jobs from the EEG scheduling API and return
@@ -687,10 +822,7 @@ def upcoming_page():
         return redirect("/lock")
 
     return render_upcoming_page()
-
-    
-
-
+  
 @app.route("/unlock", methods=["POST"])
 def unlock():
     """
