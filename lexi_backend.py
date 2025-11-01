@@ -144,7 +144,7 @@ def pick_badge_color(state_text):
         return "#dc3545"  # red
     else:
         return "#6c757d"  # grey / unknown
-
+    
 def render_upcoming_page():
     """
     Read-only Upcoming Jobs view.
@@ -152,7 +152,7 @@ def render_upcoming_page():
     """
     upcoming = get_upcoming_events()
 
-     if upcoming:
+    if upcoming:
         rows_html = ""
         for row in upcoming:
             # safely get values with .get() so we don't KeyError
@@ -235,6 +235,7 @@ def render_upcoming_page():
             }}
             tbody td {{
                 font-weight:400;
+                vertical-align:top;
             }}
             .scroller {{
                 max-height:260px;
@@ -391,6 +392,8 @@ def get_upcoming_events():
             "date_str": date_str,
             "time_str": time_str,
             "title": title,
+            "description": description,
+
         })
 
     # Sort by start time ascending just in case API gives weird order
