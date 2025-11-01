@@ -385,7 +385,7 @@ def get_upcoming_events():
 
         # Build display strings for table
         # Example: "Thu Oct 30" and "17:30 – 18:00"
-         date_str = start_dt.strftime("%d/%b/%Y").upper()
+        date_str = start_dt.strftime("%d/%b/%Y").upper()
         time_str = f"{start_dt.strftime('%H:%M')} – {end_dt.strftime('%H:%M')}"
 
         rows.append({
