@@ -310,48 +310,18 @@ def render_lock_page(error_msg=None):
     </html>
     """
 
-
 def render_home(flash_msg=None):
     """
     Control panel main screen.
     - instance name / state
     - ON / OFF buttons
-    - View Schedule link
-    - Upcoming Jobs table (next 30 days, scrollable)
-    - Lock Panel button
+    - buttons for View Schedule + Upcoming Jobs
+    - Lock Panel
     """
     instance_name, instance_state = eeg_status()
     badge_color = pick_badge_color(instance_state)
 
     safe_flash = escape(flash_msg) if flash_msg else "PIN accepted."
-
-    # Build upcoming-jobs table rows
-    upcoming = get_upcoming_events()
-
-    if upcoming:
-        rows_html = ""
-        for row in upcoming:
-            rows_html += f"""
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee; white-space:nowrap;">
-                    {escape(row['date_str'])}
-                </td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee; white-space:nowrap;">
-                    {escape(row['time_str'])}
-                </td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;">
-                    {escape(row['title'])}
-                </td>
-            </tr>
-            """
-    else:
-        rows_html = """
-        <tr>
-            <td colspan="3" style="padding:10px; text-align:center; color:#666;">
-                No upcoming jobs found.
-            </td>
-        </tr>
-        """
 
     return f"""
     <!DOCTYPE html>
@@ -445,43 +415,23 @@ def render_home(flash_msg=None):
                 border-radius:6px;
                 background:#17a2b8;
                 color:#fff;
-                text-decoration:none;">
+                text-decoration:none;
+                margin-bottom:0.5em;">
                 View Schedule
             </a>
         </div>
 
-        <!-- Upcoming Jobs block -->
-        <div style="
-            margin-top:2em;
-            background:#fff;
-            border-radius:8px;
-            box-shadow:0 2px 6px rgba(0,0,0,0.08);
-            padding:12px;
-            text-align:left;">
-
-            <div style="
-                font-size:0.95em;
-                font-weight:600;
-                margin:0 0 .5em 0;
-                text-align:center;
-                color:#000;">
+        <div style="margin-top:0.5em;">
+            <a href="/upcoming" style="
+                display:inline-block;
+                font-size:1.0em;
+                padding:0.6em 1.2em;
+                border-radius:6px;
+                background:#343a40;
+                color:#fff;
+                text-decoration:none;">
                 Upcoming Jobs
-            </div>
-
-            <div style="max-height:200px; overflow-y:auto; border:1px solid #eee; border-radius:4px;">
-                <table style="width:100%; border-collapse:collapse; font-size:0.85em;">
-                    <thead>
-                        <tr style="background:#f8f9fa;">
-                            <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #ddd; white-space:nowrap;">Date</th>
-                            <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #ddd; white-space:nowrap;">Time</th>
-                            <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #ddd;">Event</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows_html}
-                    </tbody>
-                </table>
-            </div>
+            </a>
         </div>
 
         <p style="font-size:0.9em;color:#444;margin-top:2em;">
@@ -504,6 +454,7 @@ def render_home(flash_msg=None):
     </body>
     </html>
     """
+
 
 
 def render_calendar_page():
@@ -728,6 +679,14 @@ def home():
         return render_lock_page()
     # Otherwise show control panel
     return render_home()
+    
+@app.route("/upcoming", methods=["GET"])
+def upcoming_page():
+    # Require that they're unlocked (same rule as calendar)
+    if not is_authorized():
+        return redirect(url_for("lock_page"))
+
+    return render_upcoming_page()
 
 
 @app.route("/unlock", methods=["POST"])
