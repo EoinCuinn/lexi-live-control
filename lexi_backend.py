@@ -682,11 +682,12 @@ def home():
     
 @app.route("/upcoming", methods=["GET"])
 def upcoming_page():
-    # same auth check as /calendar
-    if not is_authorized():
+    # same auth check pattern as other protected pages
+    if not is_authorized(request):
         return redirect("/lock")
 
     return render_upcoming_page()
+
     
 
 
