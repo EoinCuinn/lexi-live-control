@@ -682,11 +682,12 @@ def home():
     
 @app.route("/upcoming", methods=["GET"])
 def upcoming_page():
-    # Require that they're unlocked (same rule as calendar)
+    # same auth check as /calendar
     if not is_authorized():
-        return redirect(url_for("lock_page"))
+        return redirect("/lock")
 
     return render_upcoming_page()
+    
 
 
 @app.route("/unlock", methods=["POST"])
