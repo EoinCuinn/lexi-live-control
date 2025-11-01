@@ -152,13 +152,14 @@ def render_upcoming_page():
     """
     upcoming = get_upcoming_events()
 
-    if upcoming:
+     if upcoming:
         rows_html = ""
         for row in upcoming:
             # safely get values with .get() so we don't KeyError
             date_str = row.get("date_str", "")
             time_str = row.get("time_str", "")
             title    = row.get("title", "")
+            desc     = row.get("description", "")
 
             rows_html += f"""
             <tr>
@@ -171,12 +172,15 @@ def render_upcoming_page():
                 <td style="padding:8px 10px; border-bottom:1px solid #eee;">
                     {escape(title)}
                 </td>
+                <td style="padding:8px 10px; border-bottom:1px solid #eee;">
+                    {escape(desc)}
+                </td>
             </tr>
             """
     else:
         rows_html = """
         <tr>
-            <td colspan="3" style="padding:12px; text-align:center; color:#666;">
+            <td colspan="4" style="padding:12px; text-align:center; color:#666;">
                 No upcoming jobs found.
             </td>
         </tr>
@@ -259,9 +263,10 @@ def render_upcoming_page():
                 <table>
                     <thead>
                         <tr>
-                            <th style="width:30%;">Date</th>
-                            <th style="width:30%;">Time</th>
-                            <th style="width:40%;">Event</th>
+                            <th style="width:25%;">Date</th>
+                            <th style="width:25%;">Time</th>
+                            <th style="width:25%;">Event</th>
+                            <th style="width:25%;">Description</th>
                         </tr>
                     </thead>
                     <tbody>
