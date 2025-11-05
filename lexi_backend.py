@@ -30,6 +30,8 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "CHANGE-ME-LATER")
 
 
+BUILD = os.environ.get("RENDER_GIT_COMMIT", "dev")
+
 # -------------------
 # AUTH HELPERS
 # -------------------
@@ -825,6 +827,10 @@ def render_calendar_page():
     </html>
     """
 
+
+@app.route("/version")
+def version():
+    return {"commit": BUILD}
 
 # -------------------
 # ROUTES
