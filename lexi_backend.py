@@ -2,21 +2,19 @@ import os
 import datetime
 import pytz
 import requests
-from flask import Flask, request, abort, jsonify, redirect, make_response
+from flask import Flask, request, abort, jsonify, redirect, make_response, url_for
 from markupsafe import escape
 
 # -------------------
 # CONFIG & SETUP
 # -------------------
 
-# Control API base (turn_on / turn_off / status)
-EEG_BASE = "https://www.eegcloud.tv/speech-recognition/live/v2"
+# Base URLs
+EEG_BASE = "https://www.eegcloud.tv/speech-recognition/live/v2"   # Control API base (turn_on / turn_off / status)
+SCHED_BASE = "https://www.eegcloud.tv/events"                      # Scheduling API base (calendar events)
 
-# Scheduling API base (calendar events)
-SCHED_BASE = "https://www.eegcloud.tv/events"
-
-# Your Lexi instance ID
-INSTANCE_ID = "asr_instance_EUwk84qjnygKawQK"  # Lexi Live test instance
+# Default (legacy) instance ID – used only as a last‑resort fallback
+DEFAULT_INSTANCE_ID = os.environ.get("DEFAULT_INSTANCE_ID", "asr_instance_EUwk84qjnygKawQK")
 
 # EEG auth: username is always literally "api_key"
 API_USERNAME = "api_key"
@@ -53,13 +51,78 @@ def check_pin(submitted_pin: str) -> bool:
 
 
 # -------------------
+# MULTI‑INSTANCE SUPPORT
+# -------------------
+
+# Tiny in‑memory cache so we don't hit /instances on every page draw
+_instances_cache = {"ts": 0, "data": []}
+
+
+def fetch_all_instances(force: bool = False):
+    """
+    Hit /instances and return a list of {"id", "name"} dicts, sorted by name.
+    Uses ?get_history=0 to keep payload small. Caches for ~60s.
+    """
+    now_ts = datetime.datetime.now().timestamp()
+    if (not force) and _instances_cache["data"] and (now_ts - _instances_cache["ts"] < 60):
+        return _instances_cache["data"]
+
+    if not API_KEY:
+        return []
+
+    url = f"{EEG_BASE}/instances?get_history=0"
+    try:
+        resp = requests.get(
+            url,
+            auth=(API_USERNAME, API_KEY),
+            headers={"Accept": "application/json"},
+            timeout=15,
+        )
+        if not resp.ok:
+            return []
+        raw = resp.json() or {}
+    except Exception:
+        return []
+
+    items = []
+    for inst in raw.get("all_instances", []):
+        iid = inst.get("instance_id")
+        name = (inst.get("settings", {}) or {}).get("name") or iid
+        if iid:
+            items.append({"id": iid, "name": name})
+
+    items.sort(key=lambda x: x["name"].lower())
+    _instances_cache["data"] = items
+    _instances_cache["ts"] = now_ts
+    return items
+
+
+def current_instance_id(req: request):
+    """
+    Determine the active instance:
+      1) cookie 'instance_id' if present
+      2) first result from /instances
+      3) DEFAULT_INSTANCE_ID as a last resort
+    """
+    cid = req.cookies.get("instance_id")
+    if cid:
+        return cid
+
+    instances = fetch_all_instances()
+    if instances:
+        return instances[0]["id"]
+
+    return DEFAULT_INSTANCE_ID
+
+
+# -------------------
 # EEG HELPERS
 # -------------------
 
 def fetch_instance_info():
     """
-    Fetch info about all instances, then return the dict for INSTANCE_ID.
-    Uses /speech-recognition/live/v2/instances?get_history=0
+    Fetch info about all instances, then return the dict for the currently
+    selected instance. Uses /speech-recognition/live/v2/instances?get_history=0
     """
     if not API_KEY:
         return None
@@ -78,9 +141,11 @@ def fetch_instance_info():
     if not resp.ok:
         return None
 
-    data = resp.json()
+    data = resp.json() or {}
+    active_id = current_instance_id(request)
+
     for inst in data.get("all_instances", []):
-        if inst.get("instance_id") == INSTANCE_ID:
+        if inst.get("instance_id") == active_id:
             return inst
     return None
 
@@ -91,16 +156,17 @@ def eeg_status():
     """
     info = fetch_instance_info()
     if not info:
-        return ("Lexi Live test", "UNKNOWN")
+        # Attempt to show something graceful even if nothing resolved
+        return ("(No instance found)", "UNKNOWN")
 
-    instance_name = info.get("settings", {}).get("name", "Unknown instance")
+    instance_name = (info.get("settings", {}) or {}).get("name", "Unknown instance")
     instance_state = info.get("state", "UNKNOWN")
     return (instance_name, instance_state)
 
 
 def eeg_post(action):
     """
-    Call /turn_on or /turn_off for our instance.
+    Call /turn_on or /turn_off for our selected instance.
     Returns (ok:boolean, msg:str).
     """
     if action not in ("turn_on", "turn_off"):
@@ -109,7 +175,8 @@ def eeg_post(action):
     if not API_KEY:
         abort(500, "EEG_API_KEY is not set on the server")
 
-    url = f"{EEG_BASE}/instances/{INSTANCE_ID}/{action}"
+    cid = current_instance_id(request)
+    url = f"{EEG_BASE}/instances/{cid}/{action}"
     try:
         resp = requests.post(
             url,
@@ -118,8 +185,8 @@ def eeg_post(action):
                 "Accept": "application/json",
                 "Content-Type": "application/json",
             },
-            json={},  # body can be empty
-            timeout=10,
+            json={},  # body can be empty (you can add initialization_origin/reason if desired)
+            timeout=12,
         )
     except Exception as e:
         return False, f"Request error: {e}"
@@ -144,7 +211,12 @@ def pick_badge_color(state_text):
         return "#dc3545"  # red
     else:
         return "#6c757d"  # grey / unknown
-    
+
+
+# -------------------
+# SCHEDULING / UPCOMING
+# -------------------
+
 def render_upcoming_page():
     """
     Read-only Upcoming Jobs view.
@@ -155,7 +227,6 @@ def render_upcoming_page():
     if upcoming:
         rows_html = ""
         for row in upcoming:
-            # safely get values with .get() so we don't KeyError
             date_str = row.get("date_str", "")
             time_str = row.get("time_str", "")
             title    = row.get("title", "")
@@ -289,10 +360,7 @@ def render_upcoming_page():
 def get_upcoming_events():
     """
     Fetch upcoming scheduled Lexi jobs from the EEG scheduling API and return
-    a list of dicts:
-        { "date_str": "...", "time_str": "...", "title": "..." }
-
-    We look forward ~30 days from 'now' in Australia/Sydney.
+    a list of dicts with display fields.
     """
     if not API_KEY:
         return []
@@ -317,7 +385,7 @@ def get_upcoming_events():
             params=params,
             auth=(API_USERNAME, API_KEY),
             headers={"Accept": "application/json"},
-            timeout=10,
+            timeout=12,
         )
     except Exception:
         return []
@@ -325,17 +393,15 @@ def get_upcoming_events():
     if not resp.ok:
         return []
 
-    data = resp.json()
+    data = resp.json() or {}
     rows = []
 
-    # Reuse the same ICS parsing style as /events.json :contentReference[oaicite:2]{index=2}
     for ev in data.get("events", []):
         ics = ev.get("ics", "") or ""
 
         title = "LEXI Booking"
         description = ""
 
-        # SUMMARY → title
         if "SUMMARY:" in ics:
             try:
                 after = ics.split("SUMMARY:", 1)[1]
@@ -345,7 +411,6 @@ def get_upcoming_events():
             except Exception:
                 pass
 
-        # DESCRIPTION (not shown in table yet but we could surface later)
         if "DESCRIPTION:" in ics:
             try:
                 after_d = ics.split("DESCRIPTION:", 1)[1]
@@ -369,7 +434,6 @@ def get_upcoming_events():
         start_dt = extract_dt("DTSTART")
         end_dt   = extract_dt("DTEND")
 
-        # Fallbacks using epoch times from API if ICS missing times
         if not start_dt:
             st_epoch = ev.get("start_time")
             if st_epoch is not None:
@@ -379,12 +443,9 @@ def get_upcoming_events():
             if en_epoch is not None:
                 end_dt = datetime.datetime.fromtimestamp(en_epoch, tz)
 
-        # If still no times, skip
         if not start_dt or not end_dt:
             continue
 
-        # Build display strings for table
-        # Example: "Thu Oct 30" and "17:30 – 18:00"
         date_str = start_dt.strftime("%d/%b/%Y").upper()
         time_str = f"{start_dt.strftime('%H:%M')} – {end_dt.strftime('%H:%M')}"
 
@@ -393,25 +454,16 @@ def get_upcoming_events():
             "time_str": time_str,
             "title": title,
             "description": description,
-
         })
 
-    # Sort by start time ascending just in case API gives weird order
-    # (we can sort using start_dt, but we didn't store start_dt itself,
-    # so let's rebuild temporarily above if we want true ordering).
-    # For now assume API is chronological enough.
-
     return rows
+
 
 # -------------------
 # HTML RENDER HELPERS
 # -------------------
 
 def render_lock_page(error_msg=None):
-    """
-    PIN gate screen for both panel and calendar.
-    Clean, client-facing.
-    """
     safe_error = escape(error_msg) if error_msg else ""
     error_block = (
         f"<p style='color:#dc3545; font-weight:bold; margin-top:1em;'>{safe_error}</p>"
@@ -453,16 +505,23 @@ def render_lock_page(error_msg=None):
     </html>
     """
 
+
 def render_home(flash_msg=None):
-    """
-    Control panel main screen.
-    - instance name / state
-    - ON / OFF buttons
-    - buttons for View Schedule + Upcoming Jobs
-    - Lock Panel
-    """
     instance_name, instance_state = eeg_status()
     badge_color = pick_badge_color(instance_state)
+
+    # Build instance selector (appears above the state)
+    instances = fetch_all_instances()
+    selector_html = "<form method='post' action='/set_instance'>"
+    selector_html += "<label style=\"margin-right:6px;color:#666;\">Instance:</label>"
+    selector_html += "<select name='instance_id' onchange='this.form.submit()' style='padding:6px;'>"
+
+    cid = current_instance_id(request)
+    for inst in instances:
+        selected = "selected" if inst["id"] == cid else ""
+        selector_html += f"<option value='{inst['id']}' {selected}>{escape(inst['name'])}</option>"
+
+    selector_html += "</select></form>"
 
     safe_flash = escape(flash_msg) if flash_msg else "PIN accepted."
 
@@ -495,21 +554,20 @@ def render_home(flash_msg=None):
                 if (badgeEl && data.badge_color) {{
                     badgeEl.style.background = data.badge_color;
                 }}
-            }} catch (e) {{
-                // ignore refresh errors
-            }}
+            }} catch (e) {{}}
         }}
-
-        // Poll every 10 seconds
         setInterval(refreshStatus, 10000);
         window.addEventListener('load', refreshStatus);
         </script>
     </head>
 
-    <body style="font-family:sans-serif; max-width:420px; margin:40px auto; text-align:center; color:#222;">
+    <body style="font-family:sans-serif; max-width:460px; margin:40px auto; text-align:center; color:#222;">
 
-        <h1 style="margin-bottom:0.25em;">Lexi Live Control</h1>
-        <p style="color:#666;margin:0 0 1em 0;">Instance:
+        <h1 style="margin-bottom:0.5em;">Lexi Live Control</h1>
+
+        <div style="margin-bottom:12px;">{selector_html}</div>
+
+        <p style="color:#666;margin:0 0 1em 0;">Active:
             <span id="instanceName">{escape(instance_name)}</span>
         </p>
 
@@ -599,6 +657,9 @@ def render_home(flash_msg=None):
     """
 
 
+# -------------------
+# CALENDAR PAGE (unchanged other than imports)
+# -------------------
 
 def render_calendar_page():
     return f"""
@@ -639,7 +700,7 @@ def render_calendar_page():
                 box-shadow:0 2px 10px rgba(0,0,0,0.08);
                 padding:20px;
                 text-align:left;
-                position: relative; /* important for tooltip positioning */
+                position: relative;
             }}
             #calendar {{
                 max-width: 960px;
@@ -654,8 +715,6 @@ def render_calendar_page():
                 color: #007bff;
                 text-decoration: none;
             }}
-
-            /* tooltip that WE control */
             #fc-tooltip {{
                 position: absolute;
                 z-index: 9999;
@@ -688,12 +747,8 @@ def render_calendar_page():
 
         <script>
         document.addEventListener('DOMContentLoaded', function() {{
-
             const tooltipEl = document.getElementById('fc-tooltip');
-
             function fmtDateTime(isoStr) {{
-                // isoStr is like "2025-11-01T17:30:00+11:00"
-                // We turn it into "01 Nov 2025 17:30"
                 const d = new Date(isoStr);
                 const pad = n => n.toString().padStart(2,'0');
                 const day = pad(d.getDate());
@@ -703,106 +758,66 @@ def render_calendar_page():
                 const min = pad(d.getMinutes());
                 return day + ' ' + mon + ' ' + yr + ' ' + hr + ':' + min;
             }}
-
-            // --- basic tooltip for now (mouse-follow) ---
             function showTooltip(jsEvent, html) {{
                 tooltipEl.innerHTML = html;
                 tooltipEl.style.display = 'block';
-
-                // position near mouse (safe default baseline)
                 tooltipEl.style.left = (jsEvent.pageX + 10) + 'px';
                 tooltipEl.style.top  = (jsEvent.pageY + 10) + 'px';
             }}
-
-            function hideTooltip() {{
-                tooltipEl.style.display = 'none';
-            }}
+            function hideTooltip() {{ tooltipEl.style.display = 'none'; }}
 
             var calEl = document.getElementById('calendar');
             var calendar = new FullCalendar.Calendar(calEl, {{
                 initialView: 'dayGridMonth',
                 timeZone: 'Australia/Sydney',
                 height: 'auto',
-                headerToolbar: {{
-                    left: 'prev,next today',
-                    center: 'title',
-                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
-                }},
-
-                // 24h formatting
+                headerToolbar: {{ left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay' }},
                 eventTimeFormat: {{ hour: '2-digit', minute: '2-digit', hour12: false }},
                 slotLabelFormat: {{ hour: '2-digit', minute: '2-digit', hour12: false }},
-
                 events: function(fetchInfo, successCallback, failureCallback) {{
-                    const params = new URLSearchParams({{
-                        start: fetchInfo.startStr,
-                        end: fetchInfo.endStr
-                    }});
-                    fetch('/events.json?' + params, {{
-                        credentials: 'include' // send cookies so PIN lock still applies
-                    }})
-                    .then(r => r.json())
-                    .then(data => {{
-                        if (data.error === "locked") {{
-                            alert("Session locked. Please re-enter PIN.");
-                            window.location = "/";
+                    const params = new URLSearchParams({{ start: fetchInfo.startStr, end: fetchInfo.endStr }});
+                    fetch('/events.json?' + params, {{ credentials: 'include' }})
+                      .then(r => r.json())
+                      .then(data => {{
+                        if (data.error === 'locked') {{
+                            alert('Session locked. Please re-enter PIN.');
+                            window.location = '/';
                             return;
                         }}
                         successCallback(data);
-                    }})
-                    .catch(err => failureCallback(err));
+                      }})
+                      .catch(err => failureCallback(err));
                 }},
-
                 eventDidMount: function(info) {{
-                    // Stop FullCalendar / browser default hover tooltip.
-                    // This is what was putting that black box way out to the right.
                     info.el.removeAttribute('title');
-
-                    // Custom hover handling (OUR tooltip)
                     info.el.addEventListener('mouseenter', function(ev) {{
                         const title = info.event.title || '(no title)';
                         const startStr = fmtDateTime(info.event.startStr);
                         const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
                         let tipHtml = '<strong>' + title + '</strong><br/>' + startStr;
-                        if (endStr) {{
-                            tipHtml += ' → ' + endStr;
-                        }}
-
+                        if (endStr) {{ tipHtml += ' → ' + endStr; }}
                         showTooltip(ev, tipHtml);
                     }});
-
                     info.el.addEventListener('mousemove', function(ev) {{
                         if (tooltipEl.style.display === 'block') {{
                             tooltipEl.style.left = (ev.pageX + 10) + 'px';
                             tooltipEl.style.top  = (ev.pageY + 10) + 'px';
                         }}
                     }});
-
-                    info.el.addEventListener('mouseleave', function() {{
-                        hideTooltip();
-                    }});
+                    info.el.addEventListener('mouseleave', function() { hideTooltip(); });
                 }},
-
                 eventClick: function(info) {{
                     info.jsEvent.preventDefault();
                     const title = info.event.title || '(no title)';
                     const startStr = fmtDateTime(info.event.startStr);
                     const endStr   = info.event.endStr ? fmtDateTime(info.event.endStr) : '';
-                    const desc = info.event.extendedProps && info.event.extendedProps.description
-                        ? info.event.extendedProps.description
-                        : '';
-
-                    let msg = title + "\\n" + startStr;
-                    if (endStr) {{
-                        msg += " → " + endStr;
-                    }}
-                    if (desc) {{
-                        msg += "\\n\\n" + desc;
-                    }}
+                    const desc = info.event.extendedProps && info.event.extendedProps.description ? info.event.extendedProps.description : '';
+                    let msg = title + "\n" + startStr;
+                    if (endStr) {{ msg += ' → ' + endStr; }}
+                    if (desc)  {{ msg += "\n\n" + desc; }}
                     alert(msg);
                 }}
             }});
-
             calendar.render();
         }});
         </script>
@@ -817,36 +832,40 @@ def render_calendar_page():
 
 @app.route("/", methods=["GET"])
 def home():
-    # If not authorized yet, show PIN prompt
     if not is_authorized(request):
         return render_lock_page()
-    # Otherwise show control panel
     return render_home()
-    
+
+
+@app.route("/set_instance", methods=["POST"])
+def set_instance():
+    if not is_authorized(request):
+        return render_lock_page("Please enter PIN first.")
+
+    iid = request.form.get("instance_id", "").strip()
+    instances = fetch_all_instances()
+    if not any(i["id"] == iid for i in instances):
+        # If somehow invalid, just go home
+        return redirect(url_for("home"))
+
+    resp = make_response(redirect(url_for("home")))
+    resp.set_cookie("instance_id", iid, httponly=True, samesite="Lax")
+    return resp
+
+
 @app.route("/upcoming", methods=["GET"])
 def upcoming_page():
-    # same auth check pattern as other protected pages
     if not is_authorized(request):
         return redirect("/lock")
-
     return render_upcoming_page()
-  
+
+
 @app.route("/unlock", methods=["POST"])
 def unlock():
-    """
-    User submits the PIN here.
-    If correct -> set auth_ok cookie, redirect home.
-    If wrong   -> show lock page w/ error.
-    """
     submitted_pin = request.form.get("pin", "").strip()
     if check_pin(submitted_pin):
         resp = make_response(redirect("/"))
-        resp.set_cookie(
-            "auth_ok",
-            "yes",
-            httponly=True,
-            samesite="Lax"
-        )
+        resp.set_cookie("auth_ok", "yes", httponly=True, samesite="Lax")
         return resp
     else:
         return render_lock_page(error_msg="Incorrect PIN")
@@ -854,17 +873,8 @@ def unlock():
 
 @app.route("/lock", methods=["POST"])
 def relock():
-    """
-    User presses "Lock Panel".
-    Clear auth cookie and show PIN screen again.
-    """
     resp = make_response(render_lock_page(error_msg="Panel locked. Enter PIN again."))
-    resp.set_cookie(
-        "auth_ok",
-        "",
-        httponly=True,
-        samesite="Lax"
-    )
+    resp.set_cookie("auth_ok", "", httponly=True, samesite="Lax")
     return resp
 
 
@@ -886,12 +896,7 @@ def turn_off():
 
 @app.route("/status.json", methods=["GET"])
 def status_json():
-    """
-    Called by auto-refresh JS on the main page.
-    Also PIN-protected.
-    """
     if not is_authorized(request):
-        # Return 403 JSON so the frontend knows it's locked again.
         return jsonify({"error": "locked"}), 403
 
     name, state = eeg_status()
@@ -904,10 +909,6 @@ def status_json():
 
 @app.route("/calendar", methods=["GET"])
 def calendar_page():
-    """
-    Show the scheduling calendar (read-only).
-    PIN-protected with the same cookie logic.
-    """
     if not is_authorized(request):
         return render_lock_page()
     return render_calendar_page()
@@ -915,14 +916,6 @@ def calendar_page():
 
 @app.route("/events.json", methods=["GET"])
 def events_feed():
-    """
-    Returns scheduled events for FullCalendar (read-only).
-    Calls the EEG scheduling API:
-    GET /events?duration_start=...&duration_end=...&calculate_recurrences=true
-
-    We also try to pull SUMMARY and DESCRIPTION from ICS so we can show
-    nicer details on hover and click.
-    """
     if not is_authorized(request):
         return jsonify({"error": "locked"}), 403
 
@@ -932,9 +925,7 @@ def events_feed():
         return jsonify([])
 
     def parse_iso_loose(s):
-        # remove trailing 'Z' if present because fromisoformat can't handle 'Z'
         s = (s or "").replace("Z", "")
-        # fromisoformat gives naive datetime (no tz)
         return datetime.datetime.fromisoformat(s)
 
     tz = pytz.timezone("Australia/Sydney")
@@ -959,7 +950,7 @@ def events_feed():
             params=params,
             auth=(API_USERNAME, API_KEY),
             headers={"Accept": "application/json"},
-            timeout=10,
+            timeout=12,
         )
     except Exception:
         return jsonify([])
@@ -967,17 +958,15 @@ def events_feed():
     if not resp.ok:
         return jsonify([])
 
-    data = resp.json()
+    data = resp.json() or {}
     cal_events = []
 
     for ev in data.get("events", []):
         ics = ev.get("ics", "") or ""
 
-        # Defaults
         title = "LEXI Booking"
         description = ""
 
-        # Try SUMMARY:
         if "SUMMARY:" in ics:
             try:
                 after = ics.split("SUMMARY:", 1)[1]
@@ -987,7 +976,6 @@ def events_feed():
             except Exception:
                 pass
 
-        # Try DESCRIPTION:
         if "DESCRIPTION:" in ics:
             try:
                 after_d = ics.split("DESCRIPTION:", 1)[1]
@@ -997,7 +985,6 @@ def events_feed():
             except Exception:
                 pass
 
-        # Helper to extract DTSTART/DTEND with TZID=Australia/Sydney
         def extract_dt(tag):
             marker = f"{tag};TZID=Australia/Sydney:"
             if marker in ics:
@@ -1012,18 +999,15 @@ def events_feed():
         start_dt = extract_dt("DTSTART")
         end_dt   = extract_dt("DTEND")
 
-        # Fallback to API-provided epoch times if ICS parse fails
         if not start_dt:
             start_epoch = ev.get("start_time")
             if start_epoch is not None:
                 start_dt = datetime.datetime.fromtimestamp(start_epoch, tz)
-
         if not end_dt:
             end_epoch = ev.get("end_time")
             if end_epoch is not None:
                 end_dt = datetime.datetime.fromtimestamp(end_epoch, tz)
 
-        # If still missing, skip this event
         if not start_dt or not end_dt:
             continue
 
@@ -1031,9 +1015,7 @@ def events_feed():
             "title": title,
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
-            "extendedProps": {
-                "description": description
-            }
+            "extendedProps": {"description": description}
         })
 
     return jsonify(cal_events)
