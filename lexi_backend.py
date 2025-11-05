@@ -662,7 +662,7 @@ def render_home(flash_msg=None):
 # -------------------
 
 def render_calendar_page():
-    return f"""
+    return """
     <!DOCTYPE html>
     <html>
     <head>
